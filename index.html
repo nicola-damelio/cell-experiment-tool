@@ -56,7 +56,6 @@
 <div id="loader"><div class="spinner"></div><p class="mt-4 font-bold text-gray-700" id="loader-text">Processing...</p></div>
 <div id="root"></div>
 
-<script type="text/babel">
 let app, auth, db, appId;
 try {
     // Sostituisci questi valori finti con quelli veri che trovi nella console di Firebase 
@@ -664,7 +663,7 @@ function App() {
         };
         window.addEventListener('mouseup', handleMouseUpGlobal);
         return () => window.removeEventListener('mouseup', handleMouseUpGlobal);
-    }, [dragState, dragMode, activeFill, activeSel, grid, cellConfig, tableView]);
+    }, [dragState, dragMode, activeFill, activeSel, grid, cellConfig, tableView, processedByRegion]);
 
     useEffect(() => {
         const onKeyDown = (e) => {
