@@ -376,7 +376,7 @@ function App() {
 
     // Load experiments list for File Manager
     useEffect(() => {
-        if (!user || !db) return;
+        if (!db) return;
         const collRef = collection(db, 'artifacts', appId, 'public', 'data', 'experiments');
         const unsubscribe = onSnapshot(collRef, (snap) => {
             const exps = [];
@@ -396,7 +396,7 @@ function App() {
 
     // AUTO-SALVATAGGIO ESPERIMENTO CORRENTE
     useEffect(() => {
-        if (!isCloudReady || appView !== 'editor' || !currentDocId || !user || !db) return;
+        if (!isCloudReady || appView !== 'editor' || !currentDocId || !db) return;
         setIsSaving(true);
         if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
         saveTimeoutRef.current = setTimeout(async () => {
@@ -419,7 +419,7 @@ function App() {
     }, [plates, reportTitle, reportSubtitle, customCmpds, customCellLines, customConc, cmpColors, manualErrors, chartCfg, topConcStr, dilFactorStr, glbOffsetStr, errScaleStr, useFixedSD, fixedSDStr, showViab, fitIC50, showExcl, isCloudReady, appView, currentDocId, user, defaultTitle]);
 
     const handleBackToExplorer = async () => {
-        if (currentDocId && user && db) {
+        if (currentDocId && db) {
             setIsSaving(true);
             if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
             try {
@@ -455,7 +455,7 @@ function App() {
         setCurrentDocId(newId);
         setAppView('editor');
 
-        if(user && db) {
+        if(db) {
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'experiments', newId);
             await setDoc(docRef, {
                 title: 'Untitled Experiment',
@@ -505,7 +505,7 @@ function App() {
     const deleteExperiment = async (e, id) => {
         e.stopPropagation();
         if(confirm("Are you sure you want to delete this entire experiment?")) {
-            if(user && db) {
+            if(db) {
                 await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'experiments', id));
             }
         }
