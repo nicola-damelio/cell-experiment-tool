@@ -56,25 +56,23 @@
 <div id="loader"><div class="spinner"></div><p class="mt-4 font-bold text-gray-700" id="loader-text">Processing...</p></div>
 <div id="root"></div>
 
+<script type="text/babel" data-type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+const { useState, useEffect, useRef, useMemo } = React;
+
+// Initialize Firebase Cloud Storage for Real-time Collaboration
 let app, auth, db, appId;
 try {
-    // Sostituisci questi valori finti con quelli veri che trovi nella console di Firebase 
-    // sotto Impostazioni Progetto > Le tue app > SDK Setup (Configurazione)
-    const firebaseConfig = {
-  apiKey: "AIzaSyCVemPUayc_Q-IsbcQxnFRHg8bBLZFSHfA",
-  authDomain: "cell-experiment-tracker.firebaseapp.com",
-  projectId: "cell-experiment-tracker",
-  storageBucket: "cell-experiment-tracker.firebasestorage.app",
-  messagingSenderId: "855790481107",
-  appId: "1:855790481107:web:a566455d3f13a48a20ae26"
-    };
-    
-    appId = 'ndamelio';
-    
-    app = initializeApp(firebaseConfig);
-    auth = getAuth(app);
-    db = getFirestore(app);
-    
+    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+    appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    if (firebaseConfig) {
+        app = initializeApp(firebaseConfig);
+        auth = getAuth(app);
+        db = getFirestore(app);
+    }
 } catch (e) { console.error("Firebase init error", e); }
 
 const PLATES_DEF = {
@@ -378,7 +376,7 @@ function App() {
 
     // Load experiments list for File Manager
     useEffect(() => {
-        if (!db) return;
+        if (!user || !db) return;
         const collRef = collection(db, 'artifacts', appId, 'public', 'data', 'experiments');
         const unsubscribe = onSnapshot(collRef, (snap) => {
             const exps = [];
@@ -398,7 +396,7 @@ function App() {
 
     // AUTO-SALVATAGGIO ESPERIMENTO CORRENTE
     useEffect(() => {
-        if (!isCloudReady || appView !== 'editor' || !currentDocId || !db) return;
+        if (!isCloudReady || appView !== 'editor' || !currentDocId || !user || !db) return;
         setIsSaving(true);
         if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
         saveTimeoutRef.current = setTimeout(async () => {
@@ -421,7 +419,7 @@ function App() {
     }, [plates, reportTitle, reportSubtitle, customCmpds, customCellLines, customConc, cmpColors, manualErrors, chartCfg, topConcStr, dilFactorStr, glbOffsetStr, errScaleStr, useFixedSD, fixedSDStr, showViab, fitIC50, showExcl, isCloudReady, appView, currentDocId, user, defaultTitle]);
 
     const handleBackToExplorer = async () => {
-        if (currentDocId && db) {
+        if (currentDocId && user && db) {
             setIsSaving(true);
             if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
             try {
@@ -457,7 +455,7 @@ function App() {
         setCurrentDocId(newId);
         setAppView('editor');
 
-        if(db) {
+        if(user && db) {
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'experiments', newId);
             await setDoc(docRef, {
                 title: 'Untitled Experiment',
@@ -507,7 +505,7 @@ function App() {
     const deleteExperiment = async (e, id) => {
         e.stopPropagation();
         if(confirm("Are you sure you want to delete this entire experiment?")) {
-            if(db) {
+            if(user && db) {
                 await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'experiments', id));
             }
         }
