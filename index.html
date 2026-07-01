@@ -56,23 +56,25 @@
 <div id="loader"><div class="spinner"></div><p class="mt-4 font-bold text-gray-700" id="loader-text">Processing...</p></div>
 <div id="root"></div>
 
-<script type="text/babel" data-type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-const { useState, useEffect, useRef, useMemo } = React;
-
-// Initialize Firebase Cloud Storage for Real-time Collaboration
 let app, auth, db, appId;
 try {
-    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+    // Sostituisci questi valori finti con quelli veri che trovi nella console di Firebase 
+    // sotto Impostazioni Progetto > Le tue app > SDK Setup (Configurazione)
+    const firebaseConfig = {
+  apiKey: "AIzaSyCVemPUayc_Q-IsbcQxnFRHg8bBLZFSHfA",
+  authDomain: "cell-experiment-tracker.firebaseapp.com",
+  projectId: "cell-experiment-tracker",
+  storageBucket: "cell-experiment-tracker.firebasestorage.app",
+  messagingSenderId: "855790481107",
+  appId: "1:855790481107:web:a566455d3f13a48a20ae26"
+    };
+    
     appId = 'ndamelio';
-    if (firebaseConfig) {
-        app = initializeApp(firebaseConfig);
-        auth = getAuth(app);
-        db = getFirestore(app);
-    }
+    
+    app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
+    
 } catch (e) { console.error("Firebase init error", e); }
 
 const PLATES_DEF = {
