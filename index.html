@@ -1615,7 +1615,36 @@ function App() {
                 </div>
             </div>
         )}
-
+{/* --- INIZIO SCHERMATA EXPLORER --- */}
+        {appView === 'explorer' && (
+            <div className="absolute inset-0 z-[100] flex flex-col items-center p-10 bg-gray-100 overflow-y-auto">
+                <div className="w-full max-w-5xl bg-white p-8 rounded-xl shadow-2xl border border-gray-200">
+                    <div className="flex justify-between items-center mb-8 border-b pb-4">
+                        <h1 className="text-3xl font-black text-gray-800">🧪 Workspace Laboratorio</h1>
+                        <button onClick={createNewExperiment} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg shadow transition-colors">
+                            + Nuovo Esperimento
+                        </button>
+                    </div>
+                    {experimentsList.length === 0 ? (
+                        <div className="text-center py-12 text-gray-500 text-lg italic">Nessun esperimento nel cloud. Inizia creandone uno nuovo!</div>
+                    ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                            {experimentsList.map(exp => (
+                                <div key={exp.id} onClick={() => openExperiment(exp)} className="border border-gray-200 rounded-xl p-5 hover:shadow-xl hover:border-blue-300 transition-all cursor-pointer bg-white group flex flex-col h-full">
+                                    <h3 className="font-bold text-xl text-blue-900 mb-2 truncate">{exp.title || 'Senza Titolo'}</h3>
+                                    <p className="text-sm text-gray-500 mb-4">{exp.date} • {exp.plateCount || 1} Piastre</p>
+                                    <div className="mt-auto flex justify-between items-center pt-4 border-t border-gray-50">
+                                        <span className="text-xs font-bold bg-green-100 text-green-800 px-2 py-1 rounded-md">☁️ Online</span>
+                                        <button onClick={(e) => deleteExperiment(e, exp.id)} className="text-red-500 hover:bg-red-50 px-2 py-1 rounded text-xs font-bold opacity-0 group-hover:opacity-100 transition-all">Elimina</button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+        )}
+        {/* --- FINE SCHERMATA EXPLORER --- */}
         {/* TOP NAVBAR */}
         <div className="flex flex-col sm:flex-row justify-between border-b border-gray-300 bg-white pt-2 px-4 shadow-sm z-40 shrink-0">
             <div className="flex items-center gap-2 mr-4 pb-1">
