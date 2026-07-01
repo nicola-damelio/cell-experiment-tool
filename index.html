@@ -67,7 +67,7 @@ const { useState, useEffect, useRef, useMemo } = React;
 let app, auth, db, appId;
 try {
     const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-    appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    appId = 'ndamelio';
     if (firebaseConfig) {
         app = initializeApp(firebaseConfig);
         auth = getAuth(app);
