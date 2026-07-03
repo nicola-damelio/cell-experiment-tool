@@ -14,7 +14,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
     <style>
-        body { background-color: #f3f4f6; }
+        body { background-color: #f3f4f6; font-family: 'Inter', sans-serif; }
         .grid-input {
             width:100%; height:100%; text-align:center; border:1px solid #e5e7eb; outline:none;
             transition:all 0.2s; font-size:0.75rem; background-color:transparent;
@@ -35,6 +35,13 @@
         }
         .avoid-break { page-break-inside: avoid !important; break-inside: avoid !important; }
         
+        /* ContentEditable Placeholder */
+        [contenteditable][data-placeholder]:empty:before {
+            content: attr(data-placeholder);
+            color: #9ca3af;
+            cursor: text;
+        }
+        
         #report-container.pdf-mode { padding: 28px !important; background: #fff !important; box-sizing: border-box !important; }
         #report-container.pdf-mode .pdf-row { display: flex !important; flex-direction: row !important; flex-wrap: nowrap !important; gap: 20px !important; }
         #report-container.pdf-mode .pdf-half { width: 0 !important; flex: 1 1 0 !important; min-width: 0 !important; overflow: hidden !important; box-sizing: border-box !important; }
@@ -46,7 +53,6 @@
         #report-container.pdf-mode .pdf-chart-canvas-wrap canvas { max-width: 100% !important; max-height: 100% !important; }
         #report-container.pdf-mode .pdf-ref-image { width: auto !important; height: auto !important; max-height: 140px !important; max-width: 260px !important; object-fit: contain !important; }
 
-        /* Loading Overlay */
         #loader { display: none; position: fixed; inset: 0; background: rgba(255,255,255,0.8); z-index: 100000; align-items: center; justify-content: center; flex-direction: column; }
         .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3b82f6; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -63,7 +69,6 @@ import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection } from "ht
 
 const { useState, useEffect, useRef, useMemo } = React;
 
-// Initialize Firebase Cloud Storage for Real-time Collaboration
 let app, auth, db, appId;
 try {
     const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
@@ -95,12 +100,11 @@ const callGAS = (functionName, args = [], loadingText = "Processing...", showFul
         if (typeof google !== 'undefined' && google.script && google.script.run) {
             google.script.run
                 .withSuccessHandler(res => { if (showFullscreenLoader && loader) loader.style.display = 'none'; resolve(res); })
-                .withFailureHandler(err => { if (showFullscreenLoader && loader) loader.style.display = 'none'; alert("Error: " + err); reject(err); })
+                .withFailureHandler(err => { if (showFullscreenLoader && loader) loader.style.display = 'none'; reject(err); })
                 [functionName](...args);
         } else {
             setTimeout(() => {
                 if (showFullscreenLoader && loader) loader.style.display = 'none';
-                console.warn(`GAS Mock: ${functionName} called with`, args);
                 resolve("mock_url");
             }, 500);
         }
@@ -206,7 +210,6 @@ const formatConc = (val) => {
 
 const concKey = realX => parseFloat(realX.toPrecision(9)).toString();
 
-/* ── Custom UI Components ── */
 const TagInput = ({ tags, setTags, options, placeholder }) => {
     const [input, setInput] = useState('');
     const handleAdd = () => {
@@ -234,7 +237,45 @@ const TagInput = ({ tags, setTags, options, placeholder }) => {
     );
 };
 
-/* ═══════════════════════ MAIN APP ═══════════════════════ */
+const RichTextEditor = ({ value, onChange, placeholder }) => {
+    const editorRef = useRef(null);
+    useEffect(() => {
+        if (editorRef.current && editorRef.current.innerHTML !== value) {
+            editorRef.current.innerHTML = value || '';
+        }
+    }, [value]);
+    const execCmd = (cmd, val=null) => {
+        document.execCommand(cmd, false, val);
+        onChange(editorRef.current.innerHTML);
+        editorRef.current.focus();
+    };
+    return (
+        <div className="w-full flex-1 flex flex-col border border-gray-300 rounded-md bg-white overflow-hidden shadow-sm transition-shadow focus-within:ring-1 focus-within:ring-blue-500 focus-within:border-blue-500">
+            <div className="flex gap-1 p-1 bg-gray-50 border-b border-gray-200 shrink-0">
+                <button onClick={()=>execCmd('bold')} className="font-bold px-2 py-0.5 bg-white border border-gray-300 rounded shadow-sm hover:bg-gray-100 text-xs text-gray-700 transition">B</button>
+                <button onClick={()=>execCmd('italic')} className="italic px-2 py-0.5 bg-white border border-gray-300 rounded shadow-sm hover:bg-gray-100 text-xs text-gray-700 transition">I</button>
+                <button onClick={()=>execCmd('underline')} className="underline px-2 py-0.5 bg-white border border-gray-300 rounded shadow-sm hover:bg-gray-100 text-xs text-gray-700 transition">U</button>
+                <div className="w-px bg-gray-300 mx-1 my-0.5"></div>
+                <select onChange={e=>execCmd('fontSize', e.target.value)} className="text-xs border border-gray-300 rounded px-1 bg-white text-gray-700 shadow-sm outline-none cursor-pointer">
+                    <option value="3">Size...</option>
+                    <option value="1">Small</option>
+                    <option value="3">Normal</option>
+                    <option value="5">Large</option>
+                    <option value="7">Huge</option>
+                </select>
+            </div>
+            <div
+                ref={editorRef}
+                contentEditable
+                onBlur={e => onChange(e.target.innerHTML)}
+                className="p-3 text-sm text-gray-700 focus:outline-none custom-scrollbar"
+                style={{ resize: 'vertical', minHeight: '120px', maxHeight: '500px', overflowY: 'auto' }}
+                data-placeholder={placeholder}
+            />
+        </div>
+    )
+};
+
 function App() {
 
     const createEmptyPlate = (id, num) => {
@@ -255,20 +296,19 @@ function App() {
     const [isCloudReady, setIsCloudReady] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     
-    // FILE MANAGER STATE
     const [appView, setAppView] = useState('explorer'); 
     const [experimentsList, setExperimentsList] = useState([]);
     const [currentDocId, setCurrentDocId] = useState(null);
-    const [explorerSearch, setExplorerSearch] = useState('');
     const [pendingLoad, setPendingLoad] = useState(null);
+
+    const [dialog, setDialog] = useState(null); 
+    const [showAgenda, setShowAgenda] = useState(false);
 
     const saveTimeoutRef = useRef(null);
 
-    // UNDO SYSTEM HISTORY
     const historyRef = useRef([]);
     const [historyTrigger, setHistoryTrigger] = useState(0);
 
-    // EDITOR STATE
     const [reactPlates, setReactPlates] = useState([createEmptyPlate('p1', 1)]);
     
     const setPlates = (newPlatesOrUpdater) => {
@@ -324,7 +364,6 @@ function App() {
         expTypes = [], cellLines = [], compoundTypes = [], techniques = []
     } = activePlateData;
 
-    // Generated default title based on tags
     const defaultTitle = useMemo(() => {
         const parts = [];
         if (expTypes && expTypes.length > 0) parts.push(expTypes.join('/'));
@@ -357,7 +396,6 @@ function App() {
         glbOffsetStr, errScaleStr, useFixedSD, fixedSDStr, showViab, fitIC50, showExcl 
     };
 
-    // Firebase Auth Initialization
     useEffect(() => {
         if (!auth) return;
         const initAuth = async () => {
@@ -374,7 +412,6 @@ function App() {
         return () => unsubscribe();
     }, []);
 
-    // Load experiments list for File Manager
     useEffect(() => {
         if (!user || !db) return;
         const collRef = collection(db, 'artifacts', appId, 'public', 'data', 'experiments');
@@ -394,7 +431,6 @@ function App() {
         return () => unsubscribe();
     }, [user]);
 
-    // AUTO-SALVATAGGIO ESPERIMENTO CORRENTE
     useEffect(() => {
         if (!isCloudReady || appView !== 'editor' || !currentDocId || !user || !db) return;
         setIsSaving(true);
@@ -410,11 +446,8 @@ function App() {
                     updatedAt: Date.now(),
                     payload: JSON.stringify(latestDataRef.current) 
                 }, { merge: true });
-            } catch(e) {
-                console.error("Save error", e);
-            } finally {
-                setIsSaving(false);
-            }
+            } catch(e) { console.error("Save error", e); } 
+            finally { setIsSaving(false); }
         }, 1500); 
     }, [plates, reportTitle, reportSubtitle, customCmpds, customCellLines, customConc, cmpColors, manualErrors, chartCfg, topConcStr, dilFactorStr, glbOffsetStr, errScaleStr, useFixedSD, fixedSDStr, showViab, fitIC50, showExcl, isCloudReady, appView, currentDocId, user, defaultTitle]);
 
@@ -425,11 +458,9 @@ function App() {
             try {
                 const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'experiments', currentDocId);
                 await setDoc(docRef, { 
-                    title: reportTitle || defaultTitle, 
-                    subtitle: reportSubtitle || '',
+                    title: reportTitle || defaultTitle, subtitle: reportSubtitle || '',
                     date: plates[0]?.date || new Date().toISOString().split('T')[0],
-                    plateCount: plates.length,
-                    updatedAt: Date.now(),
+                    plateCount: plates.length, updatedAt: Date.now(),
                     payload: JSON.stringify(latestDataRef.current) 
                 }, { merge: true });
             } catch(e) {}
@@ -446,22 +477,14 @@ function App() {
         setHistoryTrigger(0);
 
         setActivePlateId('p1');
-        setReportTitle('');
-        setReportSubtitle('');
-        setCustomCmpds([]);
-        setCustomCellLines([]);
-        setCustomConc({});
-        setManualErrors({});
-        setCurrentDocId(newId);
-        setAppView('editor');
+        setReportTitle(''); setReportSubtitle(''); setCustomCmpds([]); setCustomCellLines([]);
+        setCustomConc({}); setManualErrors({}); setCurrentDocId(newId); setAppView('editor');
 
         if(user && db) {
             const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'experiments', newId);
             await setDoc(docRef, {
-                title: 'Untitled Experiment',
-                date: new Date().toISOString().split('T')[0],
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
+                title: 'Untitled Experiment', date: new Date().toISOString().split('T')[0],
+                createdAt: Date.now(), updatedAt: Date.now(),
                 payload: JSON.stringify({ plates: freshPlates })
             });
         }
@@ -490,25 +513,20 @@ function App() {
             if (s.fitIC50 !== undefined) setFitIC50(s.fitIC50);
             if (s.showExcl !== undefined) setShowExcl(s.showExcl);
             
-            historyRef.current = [];
-            setHistoryTrigger(0);
-
-            setCurrentDocId(exp.id);
-            setActivePlateId(s.plates[0]?.id || 'p1');
-            setAppView('editor');
+            historyRef.current = []; setHistoryTrigger(0);
+            setCurrentDocId(exp.id); setActivePlateId(s.plates[0]?.id || 'p1'); setAppView('editor');
         } catch(e) {
             console.error("Error loading experiment", e);
-            alert("Error reading file data.");
+            setDialog({type: 'alert', message: "Error reading file data."});
         }
     };
 
-    const deleteExperiment = async (e, id) => {
+    const deleteExperiment = (e, id) => {
         e.stopPropagation();
-        if(confirm("Are you sure you want to delete this entire experiment?")) {
-            if(user && db) {
-                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'experiments', id));
-            }
-        }
+        setDialog({
+            type: 'confirm', title: 'Delete Experiment', message: 'Are you sure you want to delete this entire experiment?',
+            onConfirm: async () => { if(user && db) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'experiments', id)); }
+        });
     };
 
     const updatePlate = (updates) => {
@@ -523,13 +541,16 @@ function App() {
 
     const removePlate = (id) => {
         if (plates.length <= 1) return;
-        if(confirm("Are you sure you want to delete this plate?")) {
-            setPlates(prev => {
-                const next = prev.filter(p => p.id !== id);
-                if (activePlateId === id) setActivePlateId(next[0].id);
-                return next;
-            });
-        }
+        setDialog({
+            type: 'confirm', title: 'Delete Plate', message: 'Are you sure you want to delete this plate?',
+            onConfirm: () => {
+                setPlates(prev => {
+                    const next = prev.filter(p => p.id !== id);
+                    if (activePlateId === id) setActivePlateId(next[0].id);
+                    return next;
+                });
+            }
+        });
     };
 
     const movePlate = (id, direction) => {
@@ -545,6 +566,24 @@ function App() {
             return prev;
         });
     };
+
+    const renameRegion = (oldName) => {
+        setDialog({
+            type: 'prompt', title: 'Rename Region', message: `Rename region "${oldName}" to:`, defaultValue: oldName,
+            onConfirm: (newName) => {
+                if (newName && newName.trim() && newName.trim() !== oldName) {
+                    const finalName = newName.trim();
+                    const nc = cellConfig.map(row => row.map(c => ({...c})));
+                    for (let r=0; r<activePlateDim.rows; r++) {
+                        for (let c=0; c<activePlateDim.cols; c++) {
+                            if (nc[r][c].region === oldName) nc[r][c].region = finalName;
+                        }
+                    }
+                    updatePlate({ cellConfig: nc });
+                }
+            }
+        });
+    }
 
     const [drWidth, setDrWidth] = useState(55);
     const [chartH, setChartH] = useState(530);
@@ -575,10 +614,8 @@ function App() {
     const currentSelectionBox = useMemo(() => {
         if (dragState.active) {
             return {
-                minR: Math.min(dragState.startR, dragState.currentR),
-                maxR: Math.max(dragState.startR, dragState.currentR),
-                minC: Math.min(dragState.startC, dragState.currentC),
-                maxC: Math.max(dragState.startC, dragState.currentC),
+                minR: Math.min(dragState.startR, dragState.currentR), maxR: Math.max(dragState.startR, dragState.currentR),
+                minC: Math.min(dragState.startC, dragState.currentC), maxC: Math.max(dragState.startC, dragState.currentC),
             };
         }
         return activeSel;
@@ -607,14 +644,21 @@ function App() {
     const mergedPlan = useMemo(() => {
         const all = [];
         plates.forEach(p => {
-            (p.plan || []).forEach(task => {
-                all.push({ ...task, plateName: p.name, plateId: p.id });
-            });
+            (p.plan || []).forEach(task => { all.push({ ...task, plateName: p.name, plateId: p.id }); });
         });
         const sorted = all.sort((a, b) => a.date.localeCompare(b.date));
         if (calFilterDate) return sorted.filter(t => t.date === calFilterDate);
         return sorted;
     }, [plates, calFilterDate]);
+    
+    const agendaGrouped = useMemo(() => {
+        const sorted = [...mergedPlan].sort((a, b) => a.date.localeCompare(b.date));
+        return sorted.reduce((acc, t) => {
+            acc[t.date] = acc[t.date] || [];
+            acc[t.date].push(t);
+            return acc;
+        }, {});
+    }, [mergedPlan]);
 
     // Calendar Handlers
     const daysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
@@ -661,7 +705,7 @@ function App() {
         };
         window.addEventListener('mouseup', handleMouseUpGlobal);
         return () => window.removeEventListener('mouseup', handleMouseUpGlobal);
-    }, [dragState, dragMode, activeFill, activeSel, grid, cellConfig, tableView, processedByRegion]);
+    }, [dragState, dragMode, activeFill, activeSel, grid, cellConfig, tableView]);
 
     useEffect(() => {
         const onKeyDown = (e) => {
@@ -692,27 +736,18 @@ function App() {
     const onMouseDownCell = (e, r, c) => {
         if (e.button !== 0) return;
         if (e.target.classList.contains('fill-handle') || e.target.classList.contains('drag-handle')) return;
-        
-        if (tableView === 'region') {
-            e.preventDefault();
-            setDragState({ active: true, startR: r, startC: c, currentR: r, currentC: c });
-        } else {
-            setSelStart({r, c}); setSelEnd({r, c}); setDragMode('selecting');
-        }
+        if (tableView === 'region') { e.preventDefault(); setDragState({ active: true, startR: r, startC: c, currentR: r, currentC: c }); } 
+        else { setSelStart({r, c}); setSelEnd({r, c}); setDragMode('selecting'); }
     };
-
     const onMouseEnterCell = (r, c) => {
-        if (dragState.active && tableView === 'region') {
-            setDragState(prev => ({ ...prev, currentR: r, currentC: c }));
-        } else if (dragMode === 'selecting') setSelEnd({r, c});
+        if (dragState.active && tableView === 'region') setDragState(prev => ({ ...prev, currentR: r, currentC: c }));
+        else if (dragMode === 'selecting') setSelEnd({r, c});
         else if (dragMode === 'filling') setFillEnd({r, c});
     };
-
     const onDoubleClickCell = (r, c) => {
         if (tableView !== 'region') return;
         const reg = cellConfig[r][c].region;
         if (!reg || reg === 'Primary') return;
-        
         let minR = r, maxR = r, minC = c, maxC = c;
         grid.forEach((row, ir) => row.forEach((_, ic) => {
             if (cellConfig[ir][ic].region === reg) {
@@ -722,16 +757,9 @@ function App() {
                 if (ic > maxC) maxC = ic;
             }
         }));
-        setSelStart({r: minR, c: minC});
-        setSelEnd({r: maxR, c: maxC});
-        setDragMode('none');
+        setSelStart({r: minR, c: minC}); setSelEnd({r: maxR, c: maxC}); setDragMode('none');
     };
-
-    const onMouseDownFillHandle = (e) => {
-        e.stopPropagation();
-        setDragMode('filling');
-        setFillEnd(selEnd);
-    };
+    const onMouseDownFillHandle = (e) => { e.stopPropagation(); setDragMode('filling'); setFillEnd(selEnd); };
 
     const handleDrop = (e, r, c) => {
         e.preventDefault();
@@ -750,8 +778,7 @@ function App() {
                     for(let sr = src.minR; sr <= src.maxR; sr++) {
                         for(let sc = src.minC; sc <= src.maxC; sc++) {
                             if (sr >= 0 && sr < activePlateDim.rows && sc >= 0 && sc < activePlateDim.cols) {
-                                nGrid[sr][sc] = '';
-                                nCell[sr][sc] = { excluded:false, role:null, conc:null, region:'Primary', manualOverride:false };
+                                nGrid[sr][sc] = ''; nCell[sr][sc] = { excluded:false, role:null, conc:null, region:'Primary', manualOverride:false };
                             }
                         }
                     }
@@ -762,8 +789,7 @@ function App() {
                         const dr = sr + rOffset;
                         const dc = sc + cOffset;
                         if (dr >= 0 && dr < activePlateDim.rows && dc >= 0 && dc < activePlateDim.cols) {
-                            nGrid[dr][dc] = data.grid[sr][sc];
-                            nCell[dr][dc] = { ...data.cellConfig[sr][sc] };
+                            nGrid[dr][dc] = data.grid[sr][sc]; nCell[dr][dc] = { ...data.cellConfig[sr][sc] };
                         }
                     }
                 }
@@ -776,25 +802,17 @@ function App() {
 
     const handlePasteSpecial = (mode) => {
         if(!appClipboard) return;
-        const src = appClipboard.sel;
-        const srcGrid = appClipboard.grid;
-        const srcCell = appClipboard.cellConfig;
-
-        const nGrid = grid.map(row=>[...row]);
-        const nCell = cellConfig.map(row=>row.map(cell=>({...cell})));
-
-        const startR = activeSel ? activeSel.minR : ctxMenu.r;
-        const startC = activeSel ? activeSel.minC : ctxMenu.c;
-
+        const src = appClipboard.sel; const srcGrid = appClipboard.grid; const srcCell = appClipboard.cellConfig;
+        const nGrid = grid.map(row=>[...row]); const nCell = cellConfig.map(row=>row.map(cell=>({...cell})));
+        const startR = activeSel ? activeSel.minR : ctxMenu.r; const startC = activeSel ? activeSel.minC : ctxMenu.c;
         let changed = false;
         for(let r=src.minR; r<=src.maxR; r++) {
             for(let c=src.minC; c<=src.maxC; c++) {
-                const dr = startR + (r - src.minR);
-                const dc = startC + (c - src.minC);
+                const dr = startR + (r - src.minR); const dc = startC + (c - src.minC);
                 if (dr >= 0 && dr < activePlateDim.rows && dc >= 0 && dc < activePlateDim.cols) {
                     if (mode === 'all' || mode === 'od') nGrid[dr][dc] = srcGrid[r][c];
-                    if (mode === 'all' || mode === 'compound') { nCell[dr][dc].role = srcCell[r][c].role; }
-                    if (mode === 'all' || mode === 'conc') { nCell[dr][dc].conc = srcCell[r][c].conc; }
+                    if (mode === 'all' || mode === 'compound') nCell[dr][dc].role = srcCell[r][c].role;
+                    if (mode === 'all' || mode === 'conc') nCell[dr][dc].conc = srcCell[r][c].conc;
                     if (mode === 'all' || mode === 'region') nCell[dr][dc].region = srcCell[r][c].region;
                     changed = true;
                 }
@@ -810,29 +828,17 @@ function App() {
         const nc = cellConfig.map(row=>row.map(cell=>({...cell})));
         const nGrid = grid.map(row=>[...row]);
         let inSelection = activeSel && ctxMenu.r >= activeSel.minR && ctxMenu.r <= activeSel.maxR && ctxMenu.c >= activeSel.minC && ctxMenu.c <= activeSel.maxC;
-        
-        const minR = inSelection ? activeSel.minR : ctxMenu.r;
-        const maxR = inSelection ? activeSel.maxR : ctxMenu.r;
-        const minC = inSelection ? activeSel.minC : ctxMenu.c;
-        const maxC = inSelection ? activeSel.maxC : ctxMenu.c;
+        const minR = inSelection ? activeSel.minR : ctxMenu.r; const maxR = inSelection ? activeSel.maxR : ctxMenu.r;
+        const minC = inSelection ? activeSel.minC : ctxMenu.c; const maxC = inSelection ? activeSel.maxC : ctxMenu.c;
 
-        for(let i=minR; i<=maxR; i++) {
-            for(let j=minC; j<=maxC; j++) {
-                fn(nc, nGrid, i, j);
-            }
-        }
-        updatePlate({ cellConfig: nc, grid: nGrid });
-        setCtxMenu(null);
+        for(let i=minR; i<=maxR; i++) for(let j=minC; j<=maxC; j++) fn(nc, nGrid, i, j);
+        updatePlate({ cellConfig: nc, grid: nGrid }); setCtxMenu(null);
     };
 
     const confirmLoad = (mode) => {
         const { plates: loadedPlates, fullState: s } = pendingLoad;
         if (mode === 'replace') {
-            setReactPlates(loadedPlates);
-            historyRef.current = [];
-            setHistoryTrigger(0);
-            
-            setActivePlateId(loadedPlates[0].id);
+            setReactPlates(loadedPlates); historyRef.current = []; setHistoryTrigger(0); setActivePlateId(loadedPlates[0].id);
             if(s.mtt_reportTitle !== undefined) setReportTitle(s.mtt_reportTitle);
             if(s.mtt_reportSubtitle !== undefined) setReportSubtitle(s.mtt_reportSubtitle);
             if(s.mtt_custom_compounds !== undefined) setCustomCmpds(s.mtt_custom_compounds);
@@ -852,9 +858,7 @@ function App() {
             if(s.mtt_showExcl !== undefined) setShowExcl(s.mtt_showExcl);
         } else if (mode === 'append') {
             const newPlates = loadedPlates.map(p => ({ ...p, id: 'p' + Math.random().toString(36).substr(2, 9) + Date.now() }));
-            setPlates(prev => [...prev, ...newPlates]);
-            setActivePlateId(newPlates[0].id);
-
+            setPlates(prev => [...prev, ...newPlates]); setActivePlateId(newPlates[0].id);
             if(s.mtt_custom_compounds !== undefined) setCustomCmpds(prev => [...new Set([...prev, ...s.mtt_custom_compounds])]);
             if(s.mtt_custom_cell_lines !== undefined) setCustomCellLines(prev => [...new Set([...prev, ...s.mtt_custom_cell_lines])]);
             if(s.mtt_custom_conc !== undefined) setCustomConc(prev => ({...prev, ...s.mtt_custom_conc}));
@@ -878,10 +882,8 @@ function App() {
     };
 
     const getRole = (r,c) => {
-        const cfg=cellConfig[r][c];
-        if(cfg.role!==null) return cfg.role;
-        const rCmp = rowCompounds[r];
-        const cCmp = compounds[c];
+        const cfg=cellConfig[r][c]; if(cfg.role!==null) return cfg.role;
+        const rCmp = rowCompounds[r]; const cCmp = compounds[c];
         if (rCmp && !cCmp) return rCmp;
         if (cCmp && !rCmp) return cCmp;
         if (!rCmp && !cCmp) return null;
@@ -897,17 +899,10 @@ function App() {
     const concOf = (r,c,role) => {
         const rl = role!==undefined ? role : getRole(r,c);
         if(!rl || ['cells','medium','pbs'].includes(rl.toLowerCase())) return 0;
-        
-        if (cellConfig[r][c].conc !== null && cellConfig[r][c].conc !== undefined) {
-            return Number(cellConfig[r][c].conc);
-        }
-
+        if (cellConfig[r][c].conc !== null && cellConfig[r][c].conc !== undefined) return Number(cellConfig[r][c].conc);
         const s  = (customConc[rl]) ? {top: parseFloat(customConc[rl].top)||0, dil: parseFloat(customConc[rl].dil)||1} : {top:tConc,dil:dFact};
-        let isHoriz = false;
-        if (rowCompounds[r] === rl) isHoriz = true;
-        else if (compounds[c] === rl) isHoriz = false;
-        else if (rowCompounds.includes(rl)) isHoriz = true;
-        let step = 0;
+        let isHoriz = false; let step = 0;
+        if (rowCompounds[r] === rl) isHoriz = true; else if (compounds[c] === rl) isHoriz = false; else if (rowCompounds.includes(rl)) isHoriz = true;
         if (isHoriz) { for (let i = 0; i < c; i++) { if (getRole(r, i) === rl) step++; } } 
         else { for (let i = 0; i < r; i++) { if (getRole(i, c) === rl) step++; } }
         return s.top / Math.pow(s.dil, step);
@@ -925,8 +920,7 @@ function App() {
         rowCompounds.forEach((c, i)=>{ if(i<activePlateDim.rows && c&&!['cells','medium','pbs'].includes(c.toLowerCase())) s.add(c); });
         grid.forEach((row,r) => row.forEach((_,c) => {
             if(r >= activePlateDim.rows || c >= activePlateDim.cols) return;
-            const role = getRole(r,c);
-            if(role && !['cells','medium','pbs'].includes(role.toLowerCase())) s.add(role);
+            const role = getRole(r,c); if(role && !['cells','medium','pbs'].includes(role.toLowerCase())) s.add(role);
         }));
         return Array.from(s);
     }, [cellConfig, activePlateDim, grid, compounds, rowCompounds]);
@@ -935,14 +929,10 @@ function App() {
         const stats = {};
         grid.forEach((row,r) => row.forEach((_,c) => {
             if(r >= activePlateDim.rows || c >= activePlateDim.cols) return;
-            const role = getRole(r,c);
-            const conc = concOf(r,c,role);
+            const role = getRole(r,c); const conc = concOf(r,c,role);
             if(role && conc > 0) {
                 if(!stats[role]) stats[role] = { min: conc, max: conc };
-                else {
-                    stats[role].min = Math.min(stats[role].min, conc);
-                    stats[role].max = Math.max(stats[role].max, conc);
-                }
+                else { stats[role].min = Math.min(stats[role].min, conc); stats[role].max = Math.max(stats[role].max, conc); }
             }
         }));
         return stats;
@@ -972,10 +962,7 @@ function App() {
         if(n>0) updatePlate({ ctrlODStr: (s/n).toFixed(4) });
     },[grid,cellConfig,ctrlType,gOff,activePlateDim]);
 
-    const viability = raw => {
-        const net=raw-bgOD, ctrl=cOD-bgOD;
-        return Math.abs(ctrl)<1e-6 ? 0 : (net/ctrl)*100;
-    };
+    const viability = raw => { const net=raw-bgOD, ctrl=cOD-bgOD; return Math.abs(ctrl)<1e-6 ? 0 : (net/ctrl)*100; };
 
     const wellColor = (r,c) => {
         const role = getRole(r,c);
@@ -1000,8 +987,7 @@ function App() {
     };
 
     const heatColor = (r,c) => {
-        const cfg=cellConfig[r][c];
-        if(cfg.excluded) return 'transparent';
+        const cfg=cellConfig[r][c]; if(cfg.excluded) return 'transparent';
         const v=rawOD(r,c); if(isNaN(v)) return 'transparent';
         const role = getRole(r,c); if(!role) return 'transparent';
         const rl=role.toLowerCase();
@@ -1015,8 +1001,7 @@ function App() {
     };
 
     const displayVal = (r,c) => {
-        const n=rawOD(r,c);
-        if(isNaN(n)) return grid[r][c]===''?'':grid[r][c];
+        const n=rawOD(r,c); if(isNaN(n)) return grid[r][c]===''?'':grid[r][c];
         return showViab ? viability(n).toFixed(1)+'%' : n.toFixed(3);
     };
 
@@ -1025,31 +1010,19 @@ function App() {
     const effectiveSD = (name, realX, computedSD) => { const m=getManual(name,realX); return typeof m==='number' ? m : computedSD; };
 
     const storeManual = (name, realX, val) => {
-        setManualErrors(prev => {
-            const inner = { ...(prev[name] || {}) };
-            inner[concKey(realX)] = val;
-            return { ...prev, [name]: inner };
-        });
+        setManualErrors(prev => { const inner = { ...(prev[name] || {}) }; inner[concKey(realX)] = val; return { ...prev, [name]: inner }; });
     };
     const clearManual = (name, realX) => {
         setManualErrors(prev => {
-            const inner = { ...(prev[name] || {}) };
-            delete inner[concKey(realX)];
-            const next = { ...prev };
-            if (Object.keys(inner).length === 0) delete next[name];
-            else next[name] = inner;
+            const inner = { ...(prev[name] || {}) }; delete inner[concKey(realX)];
+            const next = { ...prev }; if (Object.keys(inner).length === 0) delete next[name]; else next[name] = inner;
             return next;
         });
     };
     const clearAllManual = (name) => {
-        setManualErrors(prev => {
-            const next = { ...prev };
-            delete next[name];
-            return next;
-        });
+        setManualErrors(prev => { const next = { ...prev }; delete next[name]; return next; });
     };
 
-    /* ── processedData (Split by Region) ── */
     const processedByRegion = useMemo(()=>{
         const byReg = {};
         grid.forEach((row,r) => row.forEach((_,c) => {
@@ -1073,23 +1046,18 @@ function App() {
 
                 const byX={};
                 pts.forEach(p=>{
-                    const k = concKey(p.realX);
-                    if(!byX[k]) byX[k]={inc:[],excl:[]};
+                    const k = concKey(p.realX); if(!byX[k]) byX[k]={inc:[],excl:[]};
                     (p.excl ? byX[k].excl : byX[k].inc).push(p);
                 });
 
                 const vPts=[], ePts=[];
                 Object.keys(byX).forEach(ks=>{
-                    const g=byX[ks];
-                    if (g.inc.length === 0 && g.excl.length === 0) return;
-                    const rep = g.inc[0] || g.excl[0];
-                    const xr=rep.realX, xl=rep.logX;
-                    
+                    const g=byX[ks]; if (g.inc.length === 0 && g.excl.length === 0) return;
+                    const rep = g.inc[0] || g.excl[0]; const xr=rep.realX, xl=rep.logX;
                     if(g.inc.length>0){
                         const mean=g.inc.reduce((s,p)=>s+p.val,0)/g.inc.length;
                         let sd=0;
-                        if(useFixedSD) sd=fSD;
-                        else if(g.inc.length>1) sd=Math.sqrt(g.inc.reduce((s,p)=>s+Math.pow(p.val-mean,2),0)/(g.inc.length-1));
+                        if(useFixedSD) sd=fSD; else if(g.inc.length>1) sd=Math.sqrt(g.inc.reduce((s,p)=>s+Math.pow(p.val-mean,2),0)/(g.inc.length-1));
                         vPts.push({x:xl,realX:xr,y:mean,sd:effectiveSD(name,xr,sd),sdRaw:sd,pts:g.inc});
                     }
                     if(g.excl.length>0) ePts.push({x:xl,realX:xr,y:g.excl.reduce((s,p)=>s+p.val,0)/g.excl.length,pts:g.excl});
@@ -1097,8 +1065,7 @@ function App() {
                 vPts.sort((a,b)=>a.x-b.x); ePts.sort((a,b)=>a.x-b.x);
                 if (vPts.length === 0 && ePts.length === 0) return null;
 
-                const color=cmpColor(name, allCmpds.indexOf(name));
-                let fit=null;
+                const color=cmpColor(name, allCmpds.indexOf(name)); let fit=null;
                 if(fitIC50&&vPts.length>=3){
                     let sumW = 0;
                     const fitData = vPts.map(p => { const w = p.sd > 0 ? 1 / (p.sd * p.sd) : 1; sumW += w; return { x: p.realX, y: p.y, w, sd: p.sd }; });
@@ -1129,26 +1096,13 @@ function App() {
         });
     };
 
-    const autoTouchAll = () => {
-        Object.entries(processedByRegion).forEach(([reg, comps]) => {
-            comps.forEach(c => autoTouchSD(reg, c.name));
-        });
-        setUseFixedSD(true);
-    };
-
-    const revertNormalSD = () => {
-        setManualErrors({});
-        setUseFixedSD(false);
-    };
-
+    const autoTouchAll = () => { Object.entries(processedByRegion).forEach(([reg, comps]) => { comps.forEach(c => autoTouchSD(reg, c.name)); }); setUseFixedSD(true); };
+    const revertNormalSD = () => { setManualErrors({}); setUseFixedSD(false); };
     const updateCell = (r,c,v) => { const ng=grid.map(row=>[...row]); ng[r][c]=v; updatePlate({ grid: ng }); };
     
     const updateCmp  = (c,v) => {
-        const role = v;
-        const nc = cellConfig.map(row=>row.map(cell=>({...cell})));
-        const oldRole = compounds[c];
-        const isCtrl = role && ['cells','medium','pbs'].includes(role.toLowerCase());
-
+        const role = v; const nc = cellConfig.map(row=>row.map(cell=>({...cell})));
+        const oldRole = compounds[c]; const isCtrl = role && ['cells','medium','pbs'].includes(role.toLowerCase());
         if(!role) {
             for(let r=0; r<activePlateDim.rows; r++) { if(nc[r][c].role === oldRole) { nc[r][c].role = null; nc[r][c].conc = null; } }
         } else {
@@ -1157,10 +1111,7 @@ function App() {
                 if (!nc[r][c].role || nc[r][c].role === oldRole) {
                     nc[r][c].role = role;
                     if(isCtrl) nc[r][c].conc = 0;
-                    else {
-                        const s = customConc[role] || { top: tConc, dil: dFact };
-                        nc[r][c].conc = s.top / Math.pow(s.dil, step);
-                    }
+                    else { const s = customConc[role] || { top: tConc, dil: dFact }; nc[r][c].conc = s.top / Math.pow(s.dil, step); }
                     step++;
                 }
             }
@@ -1171,11 +1122,8 @@ function App() {
     };
     
     const updateRowCmp  = (r,v) => {
-        const role = v;
-        const nc = cellConfig.map(row=>row.map(cell=>({...cell})));
-        const oldRole = rowCompounds[r];
-        const isCtrl = role && ['cells','medium','pbs'].includes(role.toLowerCase());
-
+        const role = v; const nc = cellConfig.map(row=>row.map(cell=>({...cell})));
+        const oldRole = rowCompounds[r]; const isCtrl = role && ['cells','medium','pbs'].includes(role.toLowerCase());
         if(!role) {
             for(let c=0; c<activePlateDim.cols; c++) { if(nc[r][c].role === oldRole) { nc[r][c].role = null; nc[r][c].conc = null; } }
         } else {
@@ -1184,10 +1132,7 @@ function App() {
                 if (!nc[r][c].role || nc[r][c].role === oldRole) {
                     nc[r][c].role = role;
                     if(isCtrl) nc[r][c].conc = 0;
-                    else {
-                        const s = customConc[role] || { top: tConc, dil: dFact };
-                        nc[r][c].conc = s.top / Math.pow(s.dil, step);
-                    }
+                    else { const s = customConc[role] || { top: tConc, dil: dFact }; nc[r][c].conc = s.top / Math.pow(s.dil, step); }
                     step++;
                 }
             }
@@ -1197,55 +1142,35 @@ function App() {
         const t=v.trim(); if(t&&!allCmpds.includes(t)) setCustomCmpds(p=>[...p,t]);
     };
 
-    const updateCellCfg = (r,c,upd) => {
-        const nc=cellConfig.map(row=>row.map(cell=>({...cell})));
-        nc[r][c]={...nc[r][c],...upd}; 
-        updatePlate({ cellConfig: nc });
-    };
+    const updateCellCfg = (r,c,upd) => { const nc=cellConfig.map(row=>row.map(cell=>({...cell}))); nc[r][c]={...nc[r][c],...upd}; updatePlate({ cellConfig: nc }); };
     
-    const addCustomCmp = () => {
-        const el=document.getElementById('new-cmp'); const v=el.value.trim();
-        if(v&&!allCmpds.includes(v)){ setCustomCmpds(p=>[...p,v]); el.value=''; }
-    };
-    
-    const addCustomCellLine = () => {
-        const el=document.getElementById('new-cellline'); const v=el.value.trim();
-        if(v&&!allCellLines.includes(v)){ setCustomCellLines(p=>[...p,v]); el.value=''; }
-    };
+    const addCustomCmp = () => { const el=document.getElementById('new-cmp'); const v=el.value.trim(); if(v&&!allCmpds.includes(v)){ setCustomCmpds(p=>[...p,v]); el.value=''; } };
+    const addCustomCellLine = () => { const el=document.getElementById('new-cellline'); const v=el.value.trim(); if(v&&!allCellLines.includes(v)){ setCustomCellLines(p=>[...p,v]); el.value=''; } };
 
     const cleanOutliers = () => {
-        const nc=cellConfig.map(row=>row.map(c=>({...c})));
-        let changed=false;
+        const nc=cellConfig.map(row=>row.map(c=>({...c}))); let changed=false;
         Object.entries(processedByRegion).forEach(([reg, comps]) => {
             comps.forEach(cmp => {
                 for(let it=0;it<10;it++){
                     const pts=[];
                     grid.forEach((_,r)=>grid[r].forEach((_,c)=>{
                         if(r >= activePlateDim.rows || c >= activePlateDim.cols) return;
-                        const cfg = nc[r][c];
-                        const role = getRole(r,c);
+                        const cfg = nc[r][c]; const role = getRole(r,c);
                         if((cfg.region||'Primary')===reg && role===cmp.name && !cfg.manualOverride && !cfg.excluded){
-                            const n=rawOD(r,c);
-                            const xc=concOf(r,c,role);
+                            const n=rawOD(r,c); const xc=concOf(r,c,role);
                             if(!isNaN(n) && xc > 0) pts.push({r,c,realX:xc,val:viability(n),w:1}); 
                         }
                     }));
                     if(pts.length<4) break;
                     const ft=fit4PL(pts); if(!ft) break;
-                    let worst=null,maxE=0;
-                    const byC={};
+                    let worst=null,maxE=0; const byC={};
                     pts.forEach(p=>{ const k = concKey(p.realX); if(!byC[k]) byC[k]=[]; byC[k].push(p); });
                     Object.values(byC).forEach(cps=>{
                         if(cps.length<2) return;
                         const mn=cps.reduce((s,p)=>s+p.val,0)/cps.length;
                         const pred=100/(1+Math.pow(cps[0].realX/ft.ic50,ft.hill));
-                        
                         if(Math.abs(mn-pred) < 10) return;
-                        
-                        cps.forEach(p=>{
-                            const e2=Math.abs(p.val-pred);
-                            if(e2>maxE&&e2>10){maxE=e2;worst=p;}
-                        });
+                        cps.forEach(p=>{ const e2=Math.abs(p.val-pred); if(e2>maxE&&e2>10){maxE=e2;worst=p;} });
                     });
                     if(worst){ nc[worst.r][worst.c].excluded=true; changed=true; } else break;
                 }
@@ -1254,12 +1179,11 @@ function App() {
         if(changed) updatePlate({ cellConfig: nc });
     };
 
-    const restoreAll = () => {
-        const nc = cellConfig.map(row=>row.map(c=>({...c,excluded:false,manualOverride:false})));
-        updatePlate({ cellConfig: nc });
+    const restoreAll = () => { const nc = cellConfig.map(row=>row.map(c=>({...c,excluded:false,manualOverride:false}))); updatePlate({ cellConfig: nc }); };
+    
+    const resetAll = () => {
+        setDialog({ type: 'confirm', title: 'Reset All', message: 'Clear all data and settings?', onConfirm: () => window.location.reload() });
     };
-
-    const resetAll = () => { if(confirm('Clear all data and settings?')) window.location.reload(); };
 
     const loadHTML = e => {
         const f = e.target.files[0]; if(!f) return;
@@ -1268,15 +1192,13 @@ function App() {
             try {
                 const txt = ev.target.result;
                 const m = txt.match(/window\.__MTT_SAVED_STATE__\s*=\s*(\{[\s\S]*?\});/);
-                if(!m) { alert('No saved state found.'); return; }
+                if(!m) { setDialog({type: 'alert', message: 'No saved state found.'}); return; }
                 const s = JSON.parse(m[1]);
                 
                 let loadedPlates = [];
-                if (s.mtt_plates_v4) {
-                    loadedPlates = s.mtt_plates_v4;
-                } else if (s.mtt_plates_v3) {
-                    loadedPlates = s.mtt_plates_v3;
-                } else if (s.mtt_plates_v2) {
+                if (s.mtt_plates_v4) loadedPlates = s.mtt_plates_v4;
+                else if (s.mtt_plates_v3) loadedPlates = s.mtt_plates_v3;
+                else if (s.mtt_plates_v2) {
                     loadedPlates = s.mtt_plates_v2.map(p => ({
                         ...p,
                         cellsSeeded: p.cellsSeeded || s.mtt_cellsSeeded || '', comments: p.comments || s.mtt_metaComments || '',
@@ -1287,25 +1209,18 @@ function App() {
                     }));
                 } else if (s.mtt_grid) {
                     loadedPlates = [{
-                        id: 'p1', name: 'Plate 1', date: s.mtt_metaDate || '',
-                        plateType: s.mtt_plateType || '96', grid: s.mtt_grid,
+                        id: 'p1', name: 'Plate 1', date: s.mtt_metaDate || '', plateType: s.mtt_plateType || '96', grid: s.mtt_grid,
                         compounds: s.mtt_compounds || Array(12).fill(''), rowCompounds: s.mtt_row_compounds || Array(8).fill(''),
-                        cellConfig: s.mtt_cellConfig,
-                        ctrlType: s.mtt_ctrlType || 'cells', ctrlODStr: s.mtt_ctrlOD || '1.0',
-                        bgType: s.mtt_bgType || 'none', bgManualStr: s.mtt_bgManual || '0',
-                        cellsSeeded: s.mtt_cellsSeeded || '', comments: s.mtt_metaComments || '',
-                        image: s.mtt_reportImage || null, plan: s.mtt_plan || [],
-                        expTypes: [], cellLines: [], compoundTypes: [], techniques: s.mtt_metaTest ? [s.mtt_metaTest] : [],
+                        cellConfig: s.mtt_cellConfig, ctrlType: s.mtt_ctrlType || 'cells', ctrlODStr: s.mtt_ctrlOD || '1.0',
+                        bgType: s.mtt_bgType || 'none', bgManualStr: s.mtt_bgManual || '0', cellsSeeded: s.mtt_cellsSeeded || '', comments: s.mtt_metaComments || '',
+                        image: s.mtt_reportImage || null, plan: s.mtt_plan || [], expTypes: [], cellLines: [], compoundTypes: [], techniques: s.mtt_metaTest ? [s.mtt_metaTest] : [],
                         medium: s.mtt_metaMedium || '', time: s.mtt_metaTime || '', test: s.mtt_metaTest || ''
                     }];
                 }
 
-                if (loadedPlates.length > 0) {
-                    setPendingLoad({ plates: loadedPlates, fullState: s });
-                } else {
-                    alert('Could not parse plates from file.');
-                }
-            } catch(ex){ alert('Parse error: '+ex.message); }
+                if (loadedPlates.length > 0) setPendingLoad({ plates: loadedPlates, fullState: s });
+                else setDialog({type: 'alert', message: 'Could not parse plates from file.'});
+            } catch(ex){ setDialog({type:'alert', message:'Parse error: '+ex.message}); }
         };
         rd.readAsText(f); e.target.value='';
     };
@@ -1313,39 +1228,31 @@ function App() {
     const handlePaste = (e,sr,sc)=>{
         e.preventDefault();
         const raw=(e.clipboardData||window.clipboardData).getData('text').replace(/"/g,'');
-        const rows=raw.split(/\r\n|\n|\r/).filter(r=>r.trim()!=='');
-        if(!rows.length) return;
-        let dl='\t';
-        if(!rows[0].includes('\t')){ if(rows[0].includes(';')) dl=';'; else if(rows[0].includes(',')) dl=','; }
+        const rows=raw.split(/\r\n|\n|\r/).filter(r=>r.trim()!==''); if(!rows.length) return;
+        let dl='\t'; if(!rows[0].includes('\t')){ if(rows[0].includes(';')) dl=';'; else if(rows[0].includes(',')) dl=','; }
         const ng=grid.map(r=>[...r]);
         rows.forEach((row,ri)=>{
-            let cells=row.split(dl);
-            if(cells.length>0&&/^[A-H]$/i.test(cells[0].trim())) cells.shift();
+            let cells=row.split(dl); if(cells.length>0&&/^[A-H]$/i.test(cells[0].trim())) cells.shift();
             cells.forEach((cell,ci)=>{ if(sr+ri<activePlateDim.rows&&sc+ci<activePlateDim.cols) ng[sr+ri][sc+ci]=cell.trim(); });
         });
         updatePlate({ grid: ng });
     };
 
     const prepareForCapture = () => {
-        const inputs = document.querySelectorAll('.pdf-mode input:not([type="hidden"]):not([type="file"]):not([type="checkbox"]):not([type="radio"]):not([type="color"]), .pdf-mode textarea');
+        const inputs = document.querySelectorAll('.pdf-mode input:not([type="hidden"]):not([type="file"]):not([type="checkbox"]):not([type="radio"]):not([type="color"]), .pdf-mode [contenteditable]');
         inputs.forEach(inp => {
             const div = document.createElement('div');
             div.className = 'temp-pdf-text';
             div.style.cssText = window.getComputedStyle(inp).cssText;
-            div.style.height = 'auto';
-            div.style.minHeight = inp.offsetHeight + 'px';
-            div.style.whiteSpace = 'pre-wrap';
-            div.style.wordBreak = 'break-word';
-            div.style.overflow = 'hidden';
-            div.style.border = '1px solid transparent'; 
-            div.innerText = inp.value || inp.placeholder || '';
-            inp.parentNode.insertBefore(div, inp);
-            inp.style.display = 'none';
+            div.style.height = 'auto'; div.style.minHeight = inp.offsetHeight + 'px'; div.style.whiteSpace = 'pre-wrap'; div.style.wordBreak = 'break-word'; div.style.overflow = 'hidden'; div.style.border = '1px solid transparent'; 
+            if(inp.hasAttribute('contenteditable')) div.innerHTML = inp.innerHTML;
+            else div.innerText = inp.value || inp.placeholder || '';
+            inp.parentNode.insertBefore(div, inp); inp.style.display = 'none';
         });
     };
     const restoreAfterCapture = () => {
         document.querySelectorAll('.temp-pdf-text').forEach(d => d.remove());
-        document.querySelectorAll('.pdf-mode input, .pdf-mode textarea').forEach(inp => inp.style.display = '');
+        document.querySelectorAll('.pdf-mode input, .pdf-mode [contenteditable]').forEach(inp => inp.style.display = '');
     };
 
     const exportPDF = () => {
@@ -1360,27 +1267,18 @@ function App() {
                     if (!isFirstPage) pdf.addPage([PAGE_W_MM, PAGE_H_MM], 'landscape');
                     isFirstPage = false;
                     const canvas = await window.html2canvas(els[i], { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff' });
-                    const imgData = canvas.toDataURL('image/jpeg', 0.98);
-                    const imgProps = pdf.getImageProperties(imgData);
-                    let pdfW = PAGE_W_MM - 20;
-                    let pdfH = (imgProps.height * pdfW) / imgProps.width;
-                    if (pdfH > PAGE_H_MM - 20) {
-                        pdfH = PAGE_H_MM - 20;
-                        pdfW = (imgProps.width * pdfH) / imgProps.height;
-                    }
+                    const imgData = canvas.toDataURL('image/jpeg', 0.98); const imgProps = pdf.getImageProperties(imgData);
+                    let pdfW = PAGE_W_MM - 20; let pdfH = (imgProps.height * pdfW) / imgProps.width;
+                    if (pdfH > PAGE_H_MM - 20) { pdfH = PAGE_H_MM - 20; pdfW = (imgProps.width * pdfH) / imgProps.height; }
                     pdf.addImage(imgData, 'JPEG', (PAGE_W_MM - pdfW) / 2, 10, pdfW, pdfH, '', 'FAST');
                 }
                 return isFirstPage;
             };
-            const container = document.getElementById('report-container');
-            container.classList.add('pdf-mode');
+            const container = document.getElementById('report-container'); container.classList.add('pdf-mode');
             prepareForCapture();
             let first = true;
-            first = await addEls('.pdf-page-meta', first);
-            first = await addEls('.pdf-page-data', first);
-            first = await addEls('.pdf-page-region', first);
-            restoreAfterCapture();
-            container.classList.remove('pdf-mode');
+            first = await addEls('.pdf-page-meta', first); first = await addEls('.pdf-page-data', first); first = await addEls('.pdf-page-region', first);
+            restoreAfterCapture(); container.classList.remove('pdf-mode');
             pdf.save(`${(reportTitle || plateName || 'Cell_Experiment').replace(/[^a-z0-9]/gi,'_')}.pdf`);
         }, 300);
     };
@@ -1388,19 +1286,13 @@ function App() {
     const exportXLS = () => {
         const wb = XLSX.utils.book_new();
         const odData = [['Row \\ Col', ...COLS]];
-        ROWS.forEach((r, i) => {
-            const row = [r];
-            COLS.forEach((c, j) => row.push(grid[i]?.[j] || ''));
-            odData.push(row);
-        });
+        ROWS.forEach((r, i) => { const row = [r]; COLS.forEach((c, j) => row.push(grid[i]?.[j] || '')); odData.push(row); });
         XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(odData), "Raw OD");
         const concData = [['Row \\ Col', ...COLS]];
         ROWS.forEach((r, i) => {
             const row = [r];
             COLS.forEach((c, j) => {
-                const cfg = cellConfig[i][j];
-                const role = getRole(i,j);
-                const xc = concOf(i, j, role);
+                const cfg = cellConfig[i][j]; const role = getRole(i,j); const xc = concOf(i, j, role);
                 row.push(xc > 0 ? xc : (cfg.conc !== null && cfg.conc !== undefined ? cfg.conc : ''));
             });
             concData.push(row);
@@ -1410,9 +1302,7 @@ function App() {
         ROWS.forEach((r, i) => {
             const row = [r];
             COLS.forEach((c, j) => {
-                const role = getRole(i,j);
-                const xc = concOf(i, j, role);
-                let cellText = role || 'Empty';
+                const role = getRole(i,j); const xc = concOf(i, j, role); let cellText = role || 'Empty';
                 if (role && xc > 0) cellText += ` (${formatConc(xc)} ${unit || 'µM'})`;
                 row.push(cellText);
             });
@@ -1436,20 +1326,15 @@ function App() {
         setFsPanel(null);
         setTimeout(async () => {
             try {
-                let pptx = new pptxgen();
-                pptx.layout = 'LAYOUT_16x9';
-                let slide1 = pptx.addSlide();
+                let pptx = new pptxgen(); pptx.layout = 'LAYOUT_16x9'; let slide1 = pptx.addSlide();
                 slide1.addText(reportTitle || defaultTitle, { x: 1, y: 1, w: '80%', h: 1, fontSize: 36, bold: true, color: '363636' });
                 slide1.addText(reportSubtitle || '', { x: 1, y: 2, w: '80%', h: 0.5, fontSize: 24, color: '888888' });
                 slide1.addText(`Date: ${metaDate}\nPlate: ${plateName}`, { x: 1, y: 3, w: '80%', h: 1, fontSize: 18, color: '666666' });
-                const container = document.getElementById('report-container');
-                container.classList.add('pdf-mode');
-                prepareForCapture();
+                const container = document.getElementById('report-container'); container.classList.add('pdf-mode'); prepareForCapture();
                 const dataEl = document.querySelector('.pdf-page-data');
                 if (dataEl) {
                     const canvas = await window.html2canvas(dataEl, { scale: 1.5, useCORS: true, logging: false, backgroundColor: '#ffffff' });
-                    let slide2 = pptx.addSlide();
-                    slide2.addImage({ data: canvas.toDataURL('image/jpeg', 0.9), x: 0.5, y: 0.5, w: 9, h: 4.5, sizing: { type: 'contain', w: 9, h: 4.5 } });
+                    let slide2 = pptx.addSlide(); slide2.addImage({ data: canvas.toDataURL('image/jpeg', 0.9), x: 0.5, y: 0.5, w: 9, h: 4.5, sizing: { type: 'contain', w: 9, h: 4.5 } });
                 }
                 const regions = document.querySelectorAll('.pdf-page-region');
                 for (let i=0; i<regions.length; i++) {
@@ -1457,12 +1342,9 @@ function App() {
                     const canvas = await window.html2canvas(regions[i], { scale: 1.5, useCORS: true, logging: false, backgroundColor: '#ffffff' });
                     slide.addImage({ data: canvas.toDataURL('image/jpeg', 0.9), x: 0.5, y: 0.5, w: 9, h: 4.5, sizing: { type: 'contain', w: 9, h: 4.5 } });
                 }
-                restoreAfterCapture();
-                container.classList.remove('pdf-mode');
+                restoreAfterCapture(); container.classList.remove('pdf-mode');
                 await pptx.writeFile({ fileName: `${(reportTitle || plateName || 'Experiment').replace(/[^a-z0-9]/gi,'_')}.pptx` });
-            } catch (err) {
-                console.error("Error creating PPT: ", err);
-            }
+            } catch (err) { console.error("Error creating PPT: ", err); }
         }, 300);
     };
 
@@ -1471,13 +1353,10 @@ function App() {
             mtt_plates_v4:plates, mtt_active_plate:activePlateId,
             mtt_reportTitle:reportTitle, mtt_reportSubtitle:reportSubtitle,
             mtt_custom_compounds:customCmpds, mtt_custom_conc:customConc,
-            mtt_custom_cell_lines: customCellLines,
-            mtt_topConc:topConcStr, mtt_dilFactor:dilFactorStr,
-            mtt_glbOffset:glbOffsetStr,
-            mtt_errScale:errScaleStr, mtt_useFixedSD:useFixedSD, mtt_fixedSD:fixedSDStr,
+            mtt_custom_cell_lines: customCellLines, mtt_topConc:topConcStr, mtt_dilFactor:dilFactorStr,
+            mtt_glbOffset:glbOffsetStr, mtt_errScale:errScaleStr, mtt_useFixedSD:useFixedSD, mtt_fixedSD:fixedSDStr,
             mtt_showViab:showViab, mtt_fitIC50:fitIC50, mtt_showExcl:showExcl,
-            mtt_chartCfg:chartCfg, mtt_cmp_colors:cmpColors,
-            mtt_manual_errors:manualErrors, mtt_dr_width:drWidth, mtt_chart_h:chartH,
+            mtt_chartCfg:chartCfg, mtt_cmp_colors:cmpColors, mtt_manual_errors:manualErrors, mtt_dr_width:drWidth, mtt_chart_h:chartH,
             mtt_map_fontsize:mapFontSize,
         };
         const clone=document.documentElement.cloneNode(true);
@@ -1490,21 +1369,12 @@ function App() {
         const blob=new Blob(['<!DOCTYPE html>\n'+clone.outerHTML],{type:'text/html'});
         if (window.showSaveFilePicker) {
             try {
-                const handle = await window.showSaveFilePicker({
-                    types: [{ description: 'HTML File', accept: {'text/html': ['.html']} }],
-                    suggestedName: `${(reportTitle||defaultTitle||'Experiment').replace(/[^a-z0-9]/gi,'_')}_state.html`
-                });
-                const writable = await handle.createWritable();
-                await writable.write(blob);
-                await writable.close();
-                return;
-            } catch (e) {
-                if (e.name !== 'AbortError') console.error(e);
-            }
+                const handle = await window.showSaveFilePicker({ types: [{ description: 'HTML File', accept: {'text/html': ['.html']} }], suggestedName: `${(reportTitle||defaultTitle||'Experiment').replace(/[^a-z0-9]/gi,'_')}_state.html` });
+                const writable = await handle.createWritable(); await writable.write(blob); await writable.close(); return;
+            } catch (e) { if (e.name !== 'AbortError') console.error(e); }
         }
         const url=URL.createObjectURL(blob);
-        const a=document.createElement('a'); a.href=url;
-        a.download=`${(reportTitle||defaultTitle||'Experiment').replace(/[^a-z0-9]/gi,'_')}_state.html`;
+        const a=document.createElement('a'); a.href=url; a.download=`${(reportTitle||defaultTitle||'Experiment').replace(/[^a-z0-9]/gi,'_')}_state.html`;
         a.click(); URL.revokeObjectURL(url);
     };
 
@@ -1516,8 +1386,7 @@ function App() {
                     name: plate.name, date: plate.date, unit: plate.unit || 'µM',
                     rows: ['A','B','C','D','E','F','G','H'].slice(0, PLATES_DEF[plate.plateType||'96'].rows),
                     cols: Array.from({length: PLATES_DEF[plate.plateType||'96'].cols}, (_, i) => i + 1),
-                    grid: plate.grid, cellConfig: plate.cellConfig, processedData: processedByRegion,
-                    chartImages: []
+                    grid: plate.grid, cellConfig: plate.cellConfig, processedData: processedByRegion, chartImages: []
                 };
                 if (plate.id === activePlateId) {
                     const chartCanvases = document.querySelectorAll('.pdf-chart-canvas-wrap canvas');
@@ -1540,16 +1409,13 @@ function App() {
                     chartImages: []
                 };
                 if (plate.id === activePlateId) {
-                    const container = document.getElementById('report-container');
-                    container.classList.add('pdf-mode');
-                    prepareForCapture();
+                    const container = document.getElementById('report-container'); container.classList.add('pdf-mode'); prepareForCapture();
                     const regions = document.querySelectorAll('.pdf-page-region');
                     for (let i=0; i<regions.length; i++) {
                         const canvas = await window.html2canvas(regions[i], { scale: 1.5, useCORS: true, logging: false, backgroundColor: '#ffffff' });
                         pData.chartImages.push(canvas.toDataURL('image/jpeg', 0.95));
                     }
-                    restoreAfterCapture();
-                    container.classList.remove('pdf-mode');
+                    restoreAfterCapture(); container.classList.remove('pdf-mode');
                 }
                 payload.plates.push(pData);
             }
@@ -1559,9 +1425,7 @@ function App() {
     };
 
     function handleContextMenu(e, r, c) {
-        e.preventDefault();
-        const x = Math.min(e.clientX, window.innerWidth - 225);
-        const y = e.clientY; 
+        e.preventDefault(); const x = Math.min(e.clientX, window.innerWidth - 225); const y = e.clientY; 
         setCtxMenu({ x, y, r, c, region: cellConfig[r][c].region });
     }
 
@@ -1593,6 +1457,74 @@ function App() {
 
     return (
     <div className="w-full relative pb-10 flex flex-col h-screen overflow-hidden">
+        
+        {/* Custom Dialog Modal */}
+        {dialog && (
+            <div className="fixed inset-0 bg-gray-900/50 z-[999999] flex items-center justify-center p-4 backdrop-blur-sm">
+                <div className="bg-white rounded-lg shadow-xl w-full max-w-sm overflow-hidden flex flex-col border border-gray-200" onClick={e=>e.stopPropagation()}>
+                    <div className="p-4 flex flex-col">
+                        {dialog.title && <h3 className="text-lg font-bold text-gray-800 mb-2">{dialog.title}</h3>}
+                        <p className="text-sm text-gray-600 mb-4">{dialog.message}</p>
+                        
+                        {dialog.type === 'prompt' && (
+                            <input type="text" id="prompt-input" defaultValue={dialog.defaultValue} autoFocus
+                                onKeyDown={e => {
+                                    if(e.key === 'Enter'){ dialog.onConfirm(e.target.value); setDialog(null); }
+                                    if(e.key === 'Escape'){ setDialog(null); }
+                                }}
+                                className="border border-gray-300 rounded p-2 text-sm focus:border-blue-500 focus:outline-none mb-2"/>
+                        )}
+
+                        <div className="flex justify-end gap-2 mt-2">
+                            {(dialog.type === 'confirm' || dialog.type === 'prompt') && (
+                                <button onClick={()=>setDialog(null)} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded">Cancel</button>
+                            )}
+                            <button onClick={()=>{
+                                if (dialog.onConfirm) {
+                                    if(dialog.type === 'prompt') dialog.onConfirm(document.getElementById('prompt-input').value);
+                                    else dialog.onConfirm();
+                                }
+                                setDialog(null);
+                            }} className="px-4 py-2 text-sm font-bold bg-blue-600 hover:bg-blue-700 text-white rounded shadow-sm">
+                                {dialog.type === 'alert' ? 'OK' : 'Confirm'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* Agenda Modal */}
+        {showAgenda && (
+            <div className="fixed inset-0 bg-gray-900/50 z-[99999] flex items-center justify-center p-4 backdrop-blur-sm" onClick={()=>setShowAgenda(false)}>
+                <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col border border-gray-200" onClick={e=>e.stopPropagation()}>
+                    <div className="p-4 border-b flex justify-between items-center bg-gray-50 rounded-t-xl">
+                        <h2 className="text-xl font-black text-gray-800 flex items-center gap-2">🗓️ Full Agenda</h2>
+                        <button onClick={()=>setShowAgenda(false)} className="text-gray-400 hover:text-red-500 font-bold text-xl px-2">&times;</button>
+                    </div>
+                    <div className="p-5 overflow-y-auto custom-scrollbar flex-1 flex flex-col gap-5">
+                        {Object.keys(agendaGrouped).length === 0 ? (
+                            <div className="text-center text-gray-400 py-10 italic">No tasks planned across any plates.</div>
+                        ) : (
+                            Object.entries(agendaGrouped).map(([date, tasks]) => (
+                                <div key={date} className="border border-blue-100 rounded-lg p-4 bg-white shadow-sm flex flex-col">
+                                    <h3 className="font-bold text-lg text-blue-800 border-b border-blue-100 pb-2 mb-3">{date}</h3>
+                                    <ul className="flex flex-col gap-2">
+                                        {tasks.map((t, idx) => (
+                                            <li key={idx} className="flex items-center gap-3 bg-gray-50 p-2.5 border border-gray-200 rounded-md">
+                                                <button onClick={()=>{ setActivePlateId(t.plateId); setShowAgenda(false); }} className="text-xs font-bold bg-blue-100 hover:bg-blue-200 text-blue-800 px-2 py-1 rounded cursor-pointer transition-colors whitespace-nowrap shadow-sm">{t.plateName}</button>
+                                                <span className="text-sm text-gray-700 flex-1">{t.task}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </div>
+            </div>
+        )}
+
         {/* Load Data Modal */}
         {pendingLoad && (
             <div className="fixed inset-0 bg-gray-900/50 z-[99999] flex items-center justify-center backdrop-blur-sm">
@@ -1615,7 +1547,7 @@ function App() {
                 </div>
             </div>
         )}
-{/* --- INIZIO SCHERMATA EXPLORER --- */}
+
         {appView === 'explorer' && (
             <div className="absolute inset-0 z-[100] flex flex-col items-center p-10 bg-gray-100 overflow-y-auto">
                 <div className="w-full max-w-5xl bg-white p-8 rounded-xl shadow-2xl border border-gray-200">
@@ -1644,7 +1576,7 @@ function App() {
                 </div>
             </div>
         )}
-        {/* --- FINE SCHERMATA EXPLORER --- */}
+
         {/* TOP NAVBAR */}
         <div className="flex flex-col sm:flex-row justify-between border-b border-gray-300 bg-white pt-2 px-4 shadow-sm z-40 shrink-0">
             <div className="flex items-center gap-2 mr-4 pb-1">
@@ -1679,26 +1611,31 @@ function App() {
             </div>
         </div>
 
-        {/* MAIN SCROLLABLE AREA */}
+        {}
         <div className="flex-1 overflow-y-auto custom-scrollbar p-4 md:px-8 space-y-6">
             
             {/* GLOBAL PROJECT TIMELINE & CALENDAR */}
             <div className="bg-white rounded-xl shadow-sm border border-blue-200 p-4 mb-5 flex flex-col md:flex-row gap-4">
-                <div className="flex-1">
-                    <h2 className="text-sm font-bold text-blue-800 mb-2 flex items-center gap-2">📅 Project Timeline (All Plates)</h2>
-                    <div className="flex flex-col gap-1 max-h-40 overflow-y-auto custom-scrollbar pr-2">
+                <div className="flex-1 flex flex-col">
+                    <div className="flex justify-between items-center mb-2">
+                        <h2 className="text-sm font-bold text-blue-800 flex items-center gap-2">📅 Project Timeline (All Plates)</h2>
+                        <button onClick={()=>setShowAgenda(true)} className="bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 font-bold px-3 py-1 rounded text-xs transition-colors shadow-sm">
+                            🗓️ Full Agenda View
+                        </button>
+                    </div>
+                    <div className="flex flex-col gap-1 max-h-40 overflow-y-auto custom-scrollbar pr-2 flex-1">
                         {mergedPlan.length === 0 && <span className="text-xs text-gray-400 italic">No tasks scheduled.</span>}
                         {mergedPlan.map((item, idx) => (
                             <div key={idx} className="flex gap-3 items-center bg-gray-50 border border-gray-100 p-1.5 rounded">
                                 <span className="text-[11px] font-black text-gray-700 w-20">{item.date}</span>
                                 <span onClick={() => setActivePlateId(item.plateId)} className="cursor-pointer text-[10px] font-bold text-blue-600 bg-blue-100 hover:bg-blue-200 px-2 py-0.5 rounded shadow-sm whitespace-nowrap transition-colors">{item.plateName}</span>
-                                <span className="text-[12px] text-gray-800 flex-1">{item.task}</span>
+                                <span className="text-[12px] text-gray-800 flex-1 truncate">{item.task}</span>
                             </div>
                         ))}
                     </div>
                 </div>
                 {/* Dynamic Calendar UI */}
-                <div className="w-full md:w-64 bg-gray-50 border border-gray-200 rounded-lg p-3 select-none">
+                <div className="w-full md:w-64 bg-gray-50 border border-gray-200 rounded-lg p-3 select-none flex flex-col shrink-0">
                     <div className="flex justify-between items-center mb-2">
                         <button onClick={handlePrevMonth} className="text-gray-500 hover:text-blue-600 font-bold px-2">&lt;</button>
                         <h3 className="text-xs font-bold text-gray-700 text-center">{monthName}</h3>
@@ -1732,11 +1669,7 @@ function App() {
             {/* Context menu */}
             {ctxMenu&&(
                 <div className="fixed bg-white border border-gray-200 shadow-2xl rounded-md py-2 z-50 text-sm w-56 flex flex-col"
-                    style={{
-                        top: ctxMenu.y, left: ctxMenu.x, 
-                        maxHeight: '80vh',
-                        transform: ctxMenu.y > window.innerHeight / 2 ? 'translateY(-100%)' : 'none'
-                    }}>
+                    style={{ top: ctxMenu.y, left: ctxMenu.x, maxHeight: '80vh', transform: ctxMenu.y > window.innerHeight / 2 ? 'translateY(-100%)' : 'none' }}>
                     <div className="overflow-y-auto custom-scrollbar flex-1">
                         <button className="w-full text-left px-4 py-1 hover:bg-gray-100 font-bold text-red-600"
                             onClick={()=>{runCtxAction((nc, ng, r, c)=>{nc[r][c].excluded = !nc[r][c].excluded; nc[r][c].manualOverride=true;});}}>
@@ -1756,10 +1689,9 @@ function App() {
 
                         <div className="border-t my-1"/><div className="px-4 py-1 text-xs text-blue-500 uppercase font-bold">Copy / Paste</div>
                         <button className="w-full text-left px-4 py-1 hover:bg-blue-50 text-blue-700 font-medium flex items-center justify-between"
-                            onClick={() => {
-                                setAppClipboard({ sel: activeSel || {minR:ctxMenu.r, maxR:ctxMenu.r, minC:ctxMenu.c, maxC:ctxMenu.c}, sourcePlate: activePlateId, grid, cellConfig });
-                                setCtxMenu(null);
-                            }}>Copy Selection <span className="text-[10px]">Ctrl+C</span></button>
+                            onClick={() => { setAppClipboard({ sel: activeSel || {minR:ctxMenu.r, maxR:ctxMenu.r, minC:ctxMenu.c, maxC:ctxMenu.c}, sourcePlate: activePlateId, grid, cellConfig }); setCtxMenu(null); }}>
+                            Copy Selection <span className="text-[10px]">Ctrl+C</span>
+                        </button>
                         {appClipboard && <>
                             <button className="w-full text-left px-4 py-1 hover:bg-green-50 text-green-700" onClick={() => handlePasteSpecial('all')}>Paste All</button>
                             <button className="w-full text-left px-4 py-1 hover:bg-green-50 text-green-700" onClick={() => handlePasteSpecial('od')}>Paste OD Only</button>
@@ -1793,7 +1725,7 @@ function App() {
                 </div>
             )}
 
-            {/* SETUP ACTIVE PLATE */}
+            {}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-5">
                 
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-2">
@@ -2052,6 +1984,7 @@ function App() {
 
             <div id="report-container" className="flex flex-col gap-5 bg-white p-5 rounded-xl border border-gray-200 shadow-sm">
 
+                {}
                 <div className="pdf-page-meta text-center flex flex-col items-center relative">
                     <div className="absolute top-0 right-0 bg-blue-100 text-blue-800 font-bold text-xs px-2 py-1 rounded shadow-sm border border-blue-200">
                         {plateName || 'Unnamed Plate'}
@@ -2087,11 +2020,12 @@ function App() {
                     </div>
 
                     <div className="flex flex-col md:flex-row gap-6 mt-5 w-full bg-gray-50 border border-gray-200 rounded-lg p-4 text-left shadow-sm">
-                        <div className="flex-1 flex flex-col">
+                        <div className="flex-1 flex flex-col h-full min-h-[160px]">
                             <label className="text-xs font-bold text-gray-600 mb-2">📝 Comments / Notes</label>
-                            <textarea 
-                                value={metaComments} onChange={e=>updatePlate({comments: e.target.value})}
-                                className="w-full flex-1 min-h-[100px] border border-gray-300 rounded-md p-3 text-sm text-gray-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none resize-y bg-white"
+                            
+                            <RichTextEditor
+                                value={metaComments}
+                                onChange={val => updatePlate({comments: val})}
                                 placeholder="Enter your experiment notes, cell line passages, protocol deviations, etc..."
                             />
                             
@@ -2099,11 +2033,11 @@ function App() {
                                 <h3 className="text-[11px] font-bold text-gray-600 mb-2 flex justify-between items-center">
                                     <span>📅 Schedule / Planning (This Plate)</span>
                                     <div className="flex gap-2">
-                                        <input type="date" id="plan-date" className="border border-gray-300 px-1 py-0.5 text-[10px] rounded" />
+                                        <input type="date" id="plan-date" className="border border-gray-300 px-1 py-0.5 text-[10px] rounded bg-white text-gray-800" />
                                         <button onClick={() => {
                                             const d = document.getElementById('plan-date').value;
                                             if(d) updatePlate({plan: [...experimentPlan, { id: Date.now(), date: d, task: '' }].sort((a,b)=>a.date.localeCompare(b.date))});
-                                        }} className="bg-blue-100 hover:bg-blue-200 px-2 py-0.5 rounded text-[10px] font-bold text-blue-800 transition">Add Date</button>
+                                        }} className="bg-blue-100 hover:bg-blue-200 px-2 py-0.5 rounded text-[10px] font-bold text-blue-800 transition shadow-sm">Add Date</button>
                                     </div>
                                 </h3>
                                 <div className="flex flex-col gap-1 max-h-32 overflow-y-auto custom-scrollbar pr-2">
@@ -2163,7 +2097,7 @@ function App() {
                 <div className="h-px bg-gray-200"/>
 
                 <div className="pdf-page-data flex flex-col xl:flex-row gap-5 pdf-row">
-                    {/* Panel 1: Data Grid */}
+                    {}
                     <div className={`bg-gray-50 rounded-xl border border-gray-200 p-3 xl:w-1/2 pdf-half min-w-0 flex flex-col avoid-break ${fsPanel === 'data' ? 'panel-fullscreen' : ''}`}>
                         <PanelHeader 
                             title={`Data Grid (${activePlateDim.rows}x${activePlateDim.cols})`} 
@@ -2304,9 +2238,22 @@ function App() {
                                 ))}</tbody>
                             </table>
                         </div>
+                        {tableView === 'region' && (
+                            <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded flex gap-2 flex-wrap items-center">
+                                <span className="text-xs font-bold text-blue-800 mr-2">Manage Regions:</span>
+                                {[...new Set(cellConfig.flat().map(c => c.region || 'Primary'))].map(r => (
+                                    <div key={r} className="flex items-center gap-1 bg-white border border-gray-300 px-2 py-1 rounded text-xs shadow-sm">
+                                        <span className="font-bold text-gray-700">{r}</span>
+                                        {r !== 'Primary' && (
+                                            <button onClick={()=>renameRegion(r)} className="text-blue-500 hover:text-blue-700 ml-1" title="Rename Region">✏️</button>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
 
-                    {/* Panel 2: Visual Plate Map */}
+                    {}
                     <div className={`bg-gray-50 rounded-xl border border-gray-200 p-3 xl:w-1/2 pdf-half min-w-0 flex flex-col avoid-break ${fsPanel === 'map' ? 'panel-fullscreen' : ''}`}>
                         <PanelHeader 
                             title="Visual Plate Map" 
