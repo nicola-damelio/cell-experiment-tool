@@ -35,7 +35,6 @@
         }
         .avoid-break { page-break-inside: avoid !important; break-inside: avoid !important; }
         
-        /* ContentEditable Placeholder */
         [contenteditable][data-placeholder]:empty:before {
             content: attr(data-placeholder);
             color: #9ca3af;
@@ -368,10 +367,22 @@ function App() {
         const parts = [];
         if (expTypes && expTypes.length > 0) parts.push(expTypes.join('/'));
         if (cellLines && cellLines.length > 0) parts.push(cellLines.join('/'));
+        
+        const activeCompounds = new Set();
+        plates.forEach(p => {
+            (p.compounds||[]).forEach(c => { if(c && !['cells','medium','pbs'].includes(c.toLowerCase())) activeCompounds.add(c); });
+            (p.rowCompounds||[]).forEach(c => { if(c && !['cells','medium','pbs'].includes(c.toLowerCase())) activeCompounds.add(c); });
+            (p.grid||[]).forEach((row,r) => row.forEach((_,c) => {
+                const cfg = p.cellConfig?.[r]?.[c];
+                if (cfg?.role && !['cells','medium','pbs'].includes(cfg.role.toLowerCase())) activeCompounds.add(cfg.role);
+            }));
+        });
+        const cmpNames = Array.from(activeCompounds);
+        if (cmpNames.length > 0) parts.push(cmpNames.join('/'));
+        
         if (techniques && techniques.length > 0) parts.push(techniques.join('/'));
-        if (compoundTypes && compoundTypes.length > 0) parts.push(compoundTypes.join('/'));
         return parts.length > 0 ? parts.join(' - ') : 'Untitled Experiment';
-    }, [expTypes, cellLines, techniques, compoundTypes]);
+    }, [expTypes, cellLines, techniques, plates]);
 
     const tConc  = parseFloat(String(topConcStr).replace(',','.')) || 0;
     const dFact  = parseFloat(String(dilFactorStr).replace(',','.')) || 1;
@@ -395,6 +406,53 @@ function App() {
         customConc, cmpColors, manualErrors, chartCfg, topConcStr, dilFactorStr,
         glbOffsetStr, errScaleStr, useFixedSD, fixedSDStr, showViab, fitIC50, showExcl 
     };
+
+    const [expandedGroups, setExpandedGroups] = useState({});
+    const toggleGroup = (key) => setExpandedGroups(prev => ({...prev, [key]: !prev[key]}));
+
+    const groupedExperiments = useMemo(() => {
+        const groups = {};
+        experimentsList.forEach(exp => {
+            let expTypesSet = new Set();
+            let cellLinesSet = new Set();
+            let compoundsSet = new Set();
+            try {
+                const s = JSON.parse(exp.payload);
+                const pList = s.plates || [];
+                pList.forEach(p => {
+                    (p.expTypes || []).forEach(e => expTypesSet.add(e));
+                    (p.cellLines || []).forEach(e => cellLinesSet.add(e));
+                    (p.compounds || []).forEach(c => { if(c && !['cells','medium','pbs'].includes(c.toLowerCase())) compoundsSet.add(c); });
+                    (p.rowCompounds || []).forEach(c => { if(c && !['cells','medium','pbs'].includes(c.toLowerCase())) compoundsSet.add(c); });
+                    (p.grid || []).forEach((row,r) => row.forEach((_,c) => {
+                        const cfg = p.cellConfig?.[r]?.[c];
+                        if (cfg?.role && !['cells','medium','pbs'].includes(cfg.role.toLowerCase())) compoundsSet.add(cfg.role);
+                    }));
+                });
+            } catch(e) {}
+            
+            const eStr = Array.from(expTypesSet).sort().join(', ');
+            const cStr = Array.from(cellLinesSet).sort().join(', ');
+            const cmpStr = Array.from(compoundsSet).sort().join(', ');
+            
+            const hasMeta = eStr || cStr || cmpStr;
+            const key = hasMeta ? `${eStr}|${cStr}|${cmpStr}` : `unclassified_${exp.id}`;
+            
+            if (!groups[key]) {
+                groups[key] = { 
+                    key, expTypes: eStr, cellLines: cStr, compounds: cmpStr, 
+                    isUnclassified: !hasMeta, items: [] 
+                };
+            }
+            groups[key].items.push(exp);
+        });
+        
+        Object.values(groups).forEach(g => {
+            g.items.sort((a,b) => new Date(b.date || 0) - new Date(a.date || 0));
+        });
+        
+        return groups;
+    }, [experimentsList]);
 
     useEffect(() => {
         if (!auth) return;
@@ -1557,20 +1615,45 @@ function App() {
                             + Nuovo Esperimento
                         </button>
                     </div>
-                    {experimentsList.length === 0 ? (
+                    {Object.keys(groupedExperiments).length === 0 ? (
                         <div className="text-center py-12 text-gray-500 text-lg italic">Nessun esperimento nel cloud. Inizia creandone uno nuovo!</div>
                     ) : (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                            {experimentsList.map(exp => (
-                                <div key={exp.id} onClick={() => openExperiment(exp)} className="border border-gray-200 rounded-xl p-5 hover:shadow-xl hover:border-blue-300 transition-all cursor-pointer bg-white group flex flex-col h-full">
-                                    <h3 className="font-bold text-xl text-blue-900 mb-2 truncate">{exp.title || 'Senza Titolo'}</h3>
-                                    <p className="text-sm text-gray-500 mb-4">{exp.date} • {exp.plateCount || 1} Piastre</p>
-                                    <div className="mt-auto flex justify-between items-center pt-4 border-t border-gray-50">
-                                        <span className="text-xs font-bold bg-green-100 text-green-800 px-2 py-1 rounded-md">☁️ Online</span>
-                                        <button onClick={(e) => deleteExperiment(e, exp.id)} className="text-red-500 hover:bg-red-50 px-2 py-1 rounded text-xs font-bold opacity-0 group-hover:opacity-100 transition-all">Elimina</button>
+                            {Object.values(groupedExperiments).map(group => {
+                                const titleParts = [];
+                                if (group.expTypes) titleParts.push(group.expTypes);
+                                if (group.cellLines) titleParts.push(group.cellLines);
+                                if (group.compounds) titleParts.push(group.compounds);
+                                
+                                const groupTitle = group.isUnclassified ? (group.items[0].title || 'Senza Titolo') : titleParts.join(' - ');
+                                const isExpanded = expandedGroups[group.key];
+
+                                return (
+                                    <div key={group.key} className="border border-gray-200 rounded-xl p-5 hover:shadow-xl hover:border-blue-300 transition-all bg-white flex flex-col h-full">
+                                        <h3 className="font-bold text-xl text-blue-900 mb-2 leading-tight">{groupTitle}</h3>
+                                        <p className="text-sm text-gray-500 mb-4 font-medium bg-gray-100 inline-block px-2 py-1 rounded-md self-start">{group.items.length} Esecuzion{group.items.length === 1 ? 'e' : 'i'}</p>
+                                        
+                                        <div className="flex flex-col gap-2 flex-1">
+                                            {group.items.slice(0, isExpanded ? undefined : 3).map(exp => (
+                                                <div key={exp.id} onClick={() => openExperiment(exp)} className="bg-white border border-gray-200 hover:border-blue-400 hover:shadow-md p-3 rounded-lg cursor-pointer flex justify-between items-center transition-all group/item">
+                                                    <div className="flex flex-col">
+                                                        <span className="font-bold text-sm text-blue-700 flex items-center gap-2">
+                                                            📅 <span className="underline decoration-blue-300 underline-offset-2">{exp.date || 'No Date'}</span>
+                                                        </span>
+                                                        <span className="text-[11px] text-gray-500 mt-1">{exp.plateCount || 1} Piastre {exp.title && exp.title !== groupTitle ? `• ${exp.title}` : ''}</span>
+                                                    </div>
+                                                    <button onClick={(e) => { e.stopPropagation(); deleteExperiment(e, exp.id); }} className="text-red-500 hover:bg-red-50 px-2 py-1 rounded text-xs font-bold opacity-0 group-hover/item:opacity-100 transition-all">Elimina</button>
+                                                </div>
+                                            ))}
+                                            {group.items.length > 3 && (
+                                                <button onClick={() => toggleGroup(group.key)} className="text-xs text-blue-600 bg-blue-50 hover:bg-blue-100 font-bold py-2 rounded-lg mt-2 text-center transition-colors w-full">
+                                                    {isExpanded ? 'Nascondi Esecuzioni' : `Mostra altre ${group.items.length - 3} esecuzioni...`}
+                                                </button>
+                                            )}
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     )}
                 </div>
@@ -1611,7 +1694,6 @@ function App() {
             </div>
         </div>
 
-        {}
         <div className="flex-1 overflow-y-auto custom-scrollbar p-4 md:px-8 space-y-6">
             
             {/* GLOBAL PROJECT TIMELINE & CALENDAR */}
@@ -1725,7 +1807,6 @@ function App() {
                 </div>
             )}
 
-            {}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-5">
                 
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-2">
