@@ -1,0 +1,3278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cell Experiment & Inventory Tracker</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore-compat.js"></script>
+<style>
+body { background-color: #f3f4f6; font-family: 'Inter', sans-serif; }
+.grid-input { width:100%; height:100%; text-align:center; border:1px solid transparent; outline:none; transition:all 0.2s; font-size:0.75rem; background-color:transparent; }
+.grid-input:focus { border-color:#3b82f6; box-shadow:inset 0 0 0 1px #3b82f6; background-color:#fff; z-index:30; }
+.custom-scrollbar::-webkit-scrollbar { width:6px; height:6px; }
+.custom-scrollbar::-webkit-scrollbar-track { background:#f1f1f1; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:4px; }
+.color-swatch { width:18px; height:18px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 0 1px #9ca3af; cursor:pointer; flex-shrink:0; display:inline-block; }
+.panel-fullscreen { position: fixed !important; top: 2rem !important; left: 2rem !important; right: 2rem !important; bottom: 2rem !important; z-index: 9999 !important; background: #fff !important; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25) !important; margin: 0 !important; width: auto !important; height: auto !important; max-width: none !important; display: flex; flex-direction: column; }
+.avoid-break { page-break-inside: avoid !important; break-inside: avoid !important; }
+[contenteditable][data-placeholder]:empty:before { content: attr(data-placeholder); color: #9ca3af; cursor: text; }
+#report-container.pdf-mode { padding: 28px !important; background: #fff !important; box-sizing: border-box !important; }
+#report-container.pdf-mode .pdf-row { display: flex !important; flex-direction: column !important; flex-wrap: nowrap !important; gap: 30px !important; }
+#report-container.pdf-mode .pdf-half { width: 100% !important; flex: none !important; min-width: 0 !important; overflow: hidden !important; box-sizing: border-box !important; }
+#report-container.pdf-mode .pdf-half table { min-width: 0 !important; width: 100% !important; table-layout: fixed !important; }
+#report-container.pdf-mode .grid-input { background: transparent !important; }
+#report-container.pdf-mode .pdf-chart-main { width: 100% !important; margin-bottom: 20px !important; }
+#report-container.pdf-mode .pdf-chart-ic50 { width: 100% !important; border-top: 1px solid #e5e7eb; padding-top: 20px !important;}
+#report-container.pdf-mode .pdf-ref-image { width: auto !important; height: auto !important; max-height: 200px !important; max-width: 300px !important; object-fit: contain !important; }
+#loader { display: none; position: fixed; inset: 0; background: rgba(255,255,255,0.8); z-index: 100000; align-items: center; justify-content: center; flex-direction: column; }
+.spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3b82f6; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="loader"><div class="spinner"></div><p class="mt-4 font-bold text-gray-700" id="loader-text">Processing...</p></div>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useMemo, useCallback } = React;
+const DEFAULT_FIREBASE_CONFIG = {
+apiKey: "AIzaSyCVemPUayc_Q-IsbcQxnFRHg8bBLZFSHfA",
+authDomain: "cell-experiment-tracker.firebaseapp.com",
+projectId: "cell-experiment-tracker",
+storageBucket: "cell-experiment-tracker.firebasestorage.app",
+messagingSenderId: "855790481107",
+appId: "1:855790481107:web:a566455d3f13a48a20ae26"
+};
+let app, auth, db, appId;
+try {
+appId = typeof __app_id !== 'undefined' ? __app_id : 'cell-tracker-app';
+if (!firebase.apps.length) { app = firebase.initializeApp(DEFAULT_FIREBASE_CONFIG); }
+else { app = firebase.app(); }
+auth = firebase.auth();
+db = firebase.firestore();
+} catch (e) {
+console.error("Firebase init error. Falling back to local storage.", e);
+}
+const LOCAL_STORAGE_KEY = 'mtt_experiments_local_v1';
+const PLATES_DEF = {
+'96': { rows: 8, cols: 12 }, '48': { rows: 6, cols: 8 }, '24': { rows: 4, cols: 6 },
+'12': { rows: 3, cols: 4 }, '6':  { rows: 2, cols: 3 }, '1':  { rows: 1, cols: 1 },
+'9x9box': { rows: 9, cols: 9 }
+};
+const DEF_COMPOUNDS = ["p53H","p53R","MycH","MycR","BadH","BadR","BidH","BidR","Nutlin","Doxo","PBS","cells","medium"];
+const DEF_CELL_LINES = ["U2OS", "A549", "MCF-7", "HEK293", "Fibroblasts", "HeLa", "HCT116"];
+const DEF_EXP_TYPES = ["Activity", "Toxicity", "Microscopy", "Viability", "Transfection", "Storage", "Other"];
+const DEF_TECHNIQUES = ["Flow cytometry", "MTT Assay", "MTS Assay", "XTT Assay", "WST-1 Assay", "WST-8 Assay (CCK-8)", "Crystal Violet", "Resazurin", "CellTiter-Glo", "SRB Assay", "Luminescence"];
+const DEF_CMP_TYPES = ["Small Molecule", "Peptide", "Antibody", "Vehicle", "Control", "RNAi"];
+const fit4PL = (pts) => {
+const validPts = pts.filter(p=>!isNaN(p.x)&&!isNaN(p.y));
+if (validPts.length < 3) return null;
+const minX = Math.min(...validPts.map(p=>p.x));
+const maxX = Math.max(...validPts.map(p=>p.x));
+let bestIC50=1, bestH=1, minErr=Infinity;
+for (let v=Math.log10(minX)-2; v<=Math.log10(maxX)+2; v+=0.2)
+for (let h=0.1; h<=5; h+=0.2) {
+const ic50=Math.pow(10,v);
+const e=validPts.reduce((s,p)=>s + (p.w||1) * Math.pow(p.y-(100/(1+Math.pow(p.x/ic50,h))),2),0);
+if(e<minErr){minErr=e;bestIC50=ic50;bestH=h;}
+}
+const vb=Math.log10(bestIC50);
+for (let v=vb-0.2; v<=vb+0.2; v+=0.01)
+for (let h=Math.max(0.01,bestH-0.2); h<=bestH+0.2; h+=0.01) {
+const ic50=Math.pow(10,v);
+const e=validPts.reduce((s,p)=>s + (p.w||1) * Math.pow(p.y-(100/(1+Math.pow(p.x/ic50,h))),2),0);
+if(e<minErr){minErr=e;bestIC50=ic50;bestH=h;}
+}
+let avg_sd = validPts.reduce((s,p)=>s+(p.sd||0), 0) / validPts.length;
+if (avg_sd === 0) {
+const sse=validPts.reduce((s,p)=>s + Math.pow(p.y-(100/(1+Math.pow(p.x/bestIC50,bestH))),2),0);
+avg_sd=Math.sqrt(sse/Math.max(1,validPts.length-2));
+}
+const slope=(25*bestH)/bestIC50;
+const se=isFinite(avg_sd/slope)&&(avg_sd/slope)>=0 ? avg_sd/slope : 0;
+return {ic50:bestIC50, hill:bestH, se};
+};
+const errBarPlugin = {
+id:'errBars',
+afterDatasetsDraw(chart) {
+const {ctx, chartArea} = chart;
+if (!chartArea) return;
+chart.data.datasets.forEach((ds,i)=>{
+if (!ds.errorBars) return;
+const meta=chart.getDatasetMeta(i);
+if (meta.hidden) return;
+ctx.save();
+ctx.beginPath();
+ctx.rect(chartArea.left, chartArea.top, chartArea.width, chartArea.height);
+ctx.clip();
+ctx.lineWidth=2; ctx.strokeStyle=ds.borderColor||'#000';
+meta.data.forEach((el,idx)=>{
+const eb=ds.errorBars[idx];
+if (!eb || (eb.plus===0&&eb.minus===0)) return;
+const xp=el.x;
+const yv=typeof ds.data[idx]==='object'&&ds.data[idx]!==null ? ds.data[idx].y : ds.data[idx];
+const yup=chart.scales.y.getPixelForValue(yv+eb.plus);
+const ydn=chart.scales.y.getPixelForValue(yv-eb.minus);
+ctx.beginPath();
+ctx.moveTo(xp,ydn); ctx.lineTo(xp,yup);
+ctx.moveTo(xp-5,yup); ctx.lineTo(xp+5,yup);
+ctx.moveTo(xp-5,ydn); ctx.lineTo(xp+5,ydn);
+ctx.stroke();
+});
+ctx.restore();
+});
+}
+};
+const PALETTE = ['#e6194b','#3cb44b','#4363d8','#f58231','#911eb4','#42d4f4','#f032e6','#a9c42a','#469990','#9a6324','#dcbeff','#800000','#aaffc3','#fabed4','#fffac8'];
+function toHex(color) { if (!color) return '#888888'; if (/^#[0-9a-f]{6}$/i.test(color)) return color.toLowerCase(); return color; }
+function lighten(hex, f) { const r=parseInt(hex.slice(1,3),16), g=parseInt(hex.slice(3,5),16), b=parseInt(hex.slice(5,7),16); return '#'+[r,g,b].map(ch=>Math.round(ch+(255-ch)*f).toString(16).padStart(2,'0')).join(''); }
+function darken(hex, f) { const r=parseInt(hex.slice(1,3),16), g=parseInt(hex.slice(3,5),16), b=parseInt(hex.slice(5,7),16); return '#'+[r,g,b].map(ch=>Math.round(ch*(1-f)).toString(16).padStart(2,'0')).join(''); }
+function needsDarkText(hex) { const r=parseInt(hex.slice(1,3),16), g=parseInt(hex.slice(3,5),16), b=parseInt(hex.slice(5,7),16); return (0.299*r+0.587*g+0.114*b) > 160; }
+const REGION_PALETTE = ['#ef4444', '#f97316', '#8b5cf6', '#06b6d4', '#10b981', '#f43f5e', '#3b82f6', '#84cc16'];
+const getRegionColor = (regName) => {
+if (!regName || regName === 'Primary') return 'transparent';
+let hash = 0; for(let i=0; i<regName.length; i++) hash = regName.charCodeAt(i) + ((hash << 5) - hash);
+return REGION_PALETTE[Math.abs(hash) % REGION_PALETTE.length];
+};
+const formatConc = (val) => {
+if (typeof val !== 'number' || isNaN(val)) return '';
+if (val === 0) return "0";
+if (val >= 100) return Math.round(val).toString();
+const prec = parseFloat(val.toPrecision(3));
+if (Math.abs(prec) < 0.001) return prec.toExponential(2);
+return parseFloat(prec.toFixed(4)).toString();
+};
+const concKey = realX => parseFloat(realX.toPrecision(9)).toString();
+const getDirectImageUrl = (url) => {
+try {
+if (url.includes('drive.google.com') || url.includes('docs.google.com')) {
+const match = url.match(/[-\w]{25,}/);
+if (match) return `https://drive.google.com/thumbnail?id=${match[0]}&sz=w800`;
+}
+return url;
+} catch(e) { return url; }
+};
+const parsePayload = (exp) => {
+if (!exp || !exp.payload) return null;
+try {
+let pStr = exp.payload;
+if (exp.isCompressed || (!pStr.startsWith('{') && !pStr.startsWith('['))) {
+try { const dec = LZString.decompressFromUTF16(pStr); if (dec) pStr = dec; }
+catch(err) { console.error("Decompression fail", err); }
+}
+return JSON.parse(pStr);
+} catch(e) { return null; }
+};
+const TagInput = ({ tags, setTags, options, placeholder }) => {
+const [input, setInput] = useState('');
+const handleAdd = () => { const val = input.trim(); if (val && !tags.includes(val)) { setTags([...tags, val]); setInput(''); } };
+return (
+<div className="flex flex-col gap-1 w-full">
+<div className="flex gap-1 items-center">
+<input list={placeholder.replace(/\s/g,'')+"-list"} type="text" value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleAdd()} className="border border-gray-300 rounded p-1 text-xs flex-1 min-w-[100px]" placeholder={placeholder}/>
+<button onClick={handleAdd} className="bg-blue-100 hover:bg-blue-200 text-blue-800 font-bold px-2 py-1 rounded text-xs transition-colors">+</button>
+</div>
+{options && <datalist id={placeholder.replace(/\s/g,'')+"-list"}>{options.map(o=><option key={o} value={o}/>)}</datalist>}
+<div className="flex flex-wrap gap-1 mt-1">
+{tags.map(t=>(
+<span key={t} className="bg-blue-50 border border-blue-200 text-blue-800 text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1">
+{t} <button onClick={()=>setTags(tags.filter(x=>x!==t))} className="text-red-400 hover:text-red-600 font-bold">×</button>
+</span>
+))}
+</div>
+</div>
+);
+};
+const RichTextEditor = ({ value, onChange, placeholder }) => {
+const editorRef = useRef(null);
+useEffect(() => { if (editorRef.current && editorRef.current.innerHTML !== value) editorRef.current.innerHTML = value || ''; }, [value]);
+const execCmd = (cmd, val=null) => { document.execCommand(cmd, false, val); onChange(editorRef.current.innerHTML); editorRef.current.focus(); };
+const handlePaste = (e) => {
+const items = (e.clipboardData || e.originalEvent?.clipboardData)?.items;
+if (!items) return;
+for (let i = 0; i < items.length; i++) {
+if (items[i].type.indexOf('image') !== -1) {
+e.preventDefault();
+const blob = items[i].getAsFile();
+const reader = new FileReader();
+reader.onload = (event) => {
+const img = new Image();
+img.onload = () => {
+const canvas = document.createElement('canvas');
+let width = img.width; let height = img.height;
+const MAX_WIDTH = 1200;
+if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
+canvas.width = width; canvas.height = height;
+const ctx = canvas.getContext('2d'); ctx.drawImage(img, 0, 0, width, height);
+const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+document.execCommand('insertImage', false, dataUrl);
+onChange(editorRef.current.innerHTML);
+};
+img.src = event.target.result;
+};
+reader.readAsDataURL(blob);
+break;
+}
+}
+};
+return (
+<div className="w-full flex-1 flex flex-col border border-gray-300 rounded-md bg-white overflow-hidden shadow-sm transition-shadow focus-within:ring-1 focus-within:ring-blue-500 focus-within:border-blue-500">
+<div className="flex gap-1 p-1 bg-gray-50 border-b border-gray-200 shrink-0 flex-wrap">
+<button onClick={()=>execCmd('bold')} className="font-bold px-2 py-0.5 bg-white border border-gray-300 rounded shadow-sm hover:bg-gray-100 text-xs text-gray-700 transition">B</button>
+<button onClick={()=>execCmd('italic')} className="italic px-2 py-0.5 bg-white border border-gray-300 rounded shadow-sm hover:bg-gray-100 text-xs text-gray-700 transition">I</button>
+<button onClick={()=>execCmd('underline')} className="underline px-2 py-0.5 bg-white border border-gray-300 rounded shadow-sm hover:bg-gray-100 text-xs text-gray-700 transition">U</button>
+<div className="w-px bg-gray-300 mx-1 my-0.5"></div>
+<button onClick={()=>execCmd('justifyLeft')} className="px-2 py-0.5 bg-white border border-gray-300 rounded shadow-sm hover:bg-gray-100 text-xs text-gray-700 transition" title="Align Left">↤</button>
+<button onClick={()=>execCmd('justifyCenter')} className="px-2 py-0.5 bg-white border border-gray-300 rounded shadow-sm hover:bg-gray-100 text-xs text-gray-700 transition" title="Center">≡</button>
+<button onClick={()=>execCmd('justifyFull')} className="px-2 py-0.5 bg-white border border-gray-300 rounded shadow-sm hover:bg-gray-100 text-xs text-gray-700 transition" title="Justify">▤</button>
+<div className="w-px bg-gray-300 mx-1 my-0.5"></div>
+<button onClick={()=>execCmd('insertUnorderedList')} className="px-2 py-0.5 bg-white border border-gray-300 rounded shadow-sm hover:bg-gray-100 text-xs text-gray-700 transition font-bold" title="Bullets">• List</button>
+<div className="w-px bg-gray-300 mx-1 my-0.5"></div>
+<select onChange={e=>execCmd('fontSize', e.target.value)} className="text-xs border border-gray-300 rounded px-1 bg-white text-gray-700 shadow-sm outline-none cursor-pointer">
+<option value="3">Size...</option>
+<option value="1">Small</option>
+<option value="3">Normal</option>
+<option value="5">Large</option>
+<option value="7">Huge</option>
+</select>
+<div className="w-px bg-gray-300 mx-1 my-0.5"></div>
+<label className="flex items-center gap-1 text-xs text-gray-600 bg-white border border-gray-300 rounded shadow-sm px-1 cursor-pointer hover:bg-gray-100 transition">
+<span>Color:</span>
+<input type="color" className="w-4 h-4 p-0 border-none cursor-pointer" onChange={e => execCmd('foreColor', e.target.value)} />
+</label>
+</div>
+<div ref={editorRef} contentEditable onPaste={handlePaste} onBlur={e => onChange(e.target.innerHTML)}
+className="p-3 text-sm text-gray-700 focus:outline-none custom-scrollbar shadow-inner bg-slate-50/50" style={{ resize: 'vertical', minHeight: '120px', maxHeight: '500px', overflowY: 'auto' }} data-placeholder={placeholder} />
+</div>
+)
+};
+function App() {
+const createEmptyPlate = (id, num) => {
+const dim = PLATES_DEF['96'];
+const defGrid = Array(26).fill(null).map(()=>Array(26).fill(''));
+const defCell = Array(26).fill(null).map(()=>Array(26).fill(null).map(()=>({excluded:false, role:null, conc:null, region:'Primary', manualOverride:false})));
+return {
+id, name: `Plate ${num}`, date: '', plateType: '96', grid: defGrid,
+boxRows: 9, boxCols: 9, storageType: '', storageLabel: '',
+compounds: Array(dim.cols).fill(''), rowCompounds: Array(dim.rows).fill(''),
+cellConfig: defCell, ctrlType: 'cells', ctrlODStr: '1.0', bgType: 'none', bgManualStr: '0',
+unit: 'µM', cellsSeeded: '', comments: '', images: [], documents: [], plan: [],
+expTypes: [], cellLines: [], compoundTypes: [], techniques: [], medium: '', time: '', test: '',
+manualErrors: {}, topConcStr: '100', dilFactorStr: '3', glbOffsetStr: '0',
+errScaleStr: '1', useFixedSD: false, fixedSDStr: '0', showViab: true, fitIC50: true, showExcl: false, outlierThreshStr: '2.0',
+chartCfg: { yMin:'',yMax:'',xMin:'',xMax:'', ptStyle:'circle',ptSize:5,fontSize:16,xPos:'bottom',yPos:'left', xAxisLabel:'', lineStyle:'solid', lineThickness:2 }
+};
+};
+const [user, setUser] = useState(null);
+const [isCloudReady, setIsCloudReady] = useState(false);
+const [saveStatus, setSaveStatus] = useState('idle');
+const [saveErrorMsg, setSaveErrorMsg] = useState('');
+const [appView, setAppView] = useState('explorer');
+const [experimentsList, setExperimentsList] = useState([]);
+const [currentDocId, setCurrentDocId] = useState(null);
+const [pendingLoad, setPendingLoad] = useState(null);
+const [dialog, setDialog] = useState(null);
+const [showAgenda, setShowAgenda] = useState(false);
+const [mergeModal, setMergeModal] = useState(false);
+const [historyIndex, setHistoryIndex] = useState(0);
+const [vialModal, setVialModal] = useState(null);
+const [isReadingAI, setIsReadingAI] = useState(false);
+
+const [boxSearch, setBoxSearch] = useState('');
+const [boxRotation, setBoxRotation] = useState(0); 
+const [selectedWells, setSelectedWells] = useState([]); 
+
+const BOX_ROW_LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+
+const historyRef = useRef([ [createEmptyPlate('p1', 1)] ]);
+const [reactPlates, setReactPlates] = useState(historyRef.current[0]);
+const setPlates = useCallback((updater) => {
+setReactPlates(prev => {
+const next = typeof updater === 'function' ? updater(prev) : updater;
+const nextStr = JSON.stringify(next);
+const prevStr = JSON.stringify(prev);
+if (nextStr !== prevStr) {
+const currentHistory = historyRef.current.slice(0, historyIndex + 1);
+currentHistory.push(next);
+if (currentHistory.length > 50) currentHistory.shift();
+historyRef.current = currentHistory;
+setHistoryIndex(currentHistory.length - 1);
+}
+return next;
+});
+}, [historyIndex]);
+const handleUndo = () => {
+if (historyIndex > 0) {
+const newIdx = historyIndex - 1;
+setHistoryIndex(newIdx);
+setReactPlates(historyRef.current[newIdx]);
+}
+};
+const handleRedo = () => {
+if (historyIndex < historyRef.current.length - 1) {
+const newIdx = historyIndex + 1;
+setHistoryIndex(newIdx);
+setReactPlates(historyRef.current[newIdx]);
+}
+};
+const plates = reactPlates;
+const [activePlateId, setActivePlateId] = useState('p1');
+const [searchQuery, setSearchQuery] = useState('');
+const [reportTitle, setReportTitle] = useState('');
+const [reportSubtitle, setReportSubtitle] = useState('');
+const [customCmpds, setCustomCmpds] = useState([]);
+const [customCellLines, setCustomCellLines] = useState([]);
+const [customConc, setCustomConc] = useState({});
+const [cmpColors, setCmpColors] = useState({});
+const activePlateData = plates.find(p => p.id === activePlateId) || plates[0] || {};
+const manualErrors = activePlateData.manualErrors || {};
+const topConcStr = activePlateData.topConcStr !== undefined ? activePlateData.topConcStr : '100';
+const dilFactorStr = activePlateData.dilFactorStr !== undefined ? activePlateData.dilFactorStr : '3';
+const glbOffsetStr = activePlateData.glbOffsetStr !== undefined ? activePlateData.glbOffsetStr : '0';
+const errScaleStr = activePlateData.errScaleStr !== undefined ? activePlateData.errScaleStr : '1';
+const useFixedSD = activePlateData.useFixedSD !== undefined ? activePlateData.useFixedSD : false;
+const fixedSDStr = activePlateData.fixedSDStr !== undefined ? activePlateData.fixedSDStr : '0';
+const showViab = activePlateData.showViab !== undefined ? activePlateData.showViab : true;
+const fitIC50 = activePlateData.fitIC50 !== undefined ? activePlateData.fitIC50 : true;
+const showExcl = activePlateData.showExcl !== undefined ? activePlateData.showExcl : false;
+const outlierThreshStr = activePlateData.outlierThreshStr !== undefined ? activePlateData.outlierThreshStr : '2.0';
+const outlierThresh = parseFloat(String(outlierThreshStr).replace(',','.')) || 2.0;
+const chartCfg = activePlateData.chartCfg || { yMin:'',yMax:'',xMin:'',xMax:'', ptStyle:'circle',ptSize:5,fontSize:16,xPos:'bottom',yPos:'left', xAxisLabel:'', lineStyle:'solid', lineThickness:2 };
+const updatePlate = (updates) => {
+setPlates(prev => prev.map(p => p.id === activePlateId ? { ...p, ...updates } : p));
+};
+const setTopConcStr = (v) => updatePlate({ topConcStr: v });
+const setDilFactorStr = (v) => updatePlate({ dilFactorStr: v });
+const setGlbOffsetStr = (v) => updatePlate({ glbOffsetStr: v });
+const setErrScaleStr = (v) => updatePlate({ errScaleStr: v });
+const setUseFixedSD = (v) => updatePlate({ useFixedSD: v });
+const setFixedSDStr = (v) => updatePlate({ fixedSDStr: v });
+const setShowViab = (v) => updatePlate({ showViab: v });
+const setFitIC50 = (v) => updatePlate({ fitIC50: v });
+const setShowExcl = (v) => updatePlate({ showExcl: v });
+const setOutlierThreshStr = (v) => updatePlate({ outlierThreshStr: v });
+const setChartCfg = (valOrUpdater) => {
+const next = typeof valOrUpdater === 'function' ? valOrUpdater(chartCfg) : valOrUpdater;
+updatePlate({ chartCfg: next });
+};
+const setManualErrors = (valOrUpdater) => {
+const next = typeof valOrUpdater === 'function' ? valOrUpdater(manualErrors) : valOrUpdater;
+updatePlate({ manualErrors: next });
+};
+const {
+plateType, grid, compounds, rowCompounds, cellConfig, ctrlType, ctrlODStr, bgType, bgManualStr, date: metaDate, name: plateName,
+unit, medium: metaMedium = '', time: metaTime = '', test: metaTest = '', cellsSeeded: metaCellsSeeded, comments: metaComments,
+images = [], image: legacyImage, documents = [], plan: experimentPlan,
+expTypes = [], cellLines = [], compoundTypes = [], techniques = [], fbs: metaFBS = '', antibiotics: metaATB = ''
+} = activePlateData;
+const displayImages = images.length > 0 ? images : (legacyImage ? [legacyImage] : []);
+
+const toggleWellSelection = (r, c) => {
+setSelectedWells(prev => {
+  const exists = prev.find(w => w.r === r && w.c === c);
+  if (exists) return prev.filter(w => !(w.r === r && w.c === c));
+  return [...prev, {r, c}];
+});
+};
+
+const getWellData = (r, c) => {
+  try {
+    const val = grid[r]?.[c];
+    if (typeof val === 'string' && val.startsWith('{')) {
+      const parsed = JSON.parse(val);
+      return {
+        compound: parsed.compound || '',
+        concentration: parsed.concentration || '',
+        volume: parsed.volume || '',
+        date: parsed.date || '',
+        weight: parsed.weight || '',
+        description: parsed.description || '' // <--- NEW
+      };
+    }
+  } catch(e) {}
+  
+  return { 
+    compound: (grid[r]?.[c] || '') + '', 
+    concentration: '', volume: '', date: '', weight: '', description: '' // <--- NEW
+  };
+};
+
+const updateWellData = (r, c, field, value) => {
+  const current = getWellData(r, c);
+  current[field] = value;
+  
+  // Safely copy the grid and ensure rows exist if box was expanded
+  const ng = [...grid];
+  for(let i=0; i<=r; i++) {
+     if(!ng[i]) ng[i] = [];
+     else ng[i] = [...ng[i]];
+  }
+  
+  ng[r][c] = JSON.stringify(current);
+  updatePlate({ grid: ng });
+  
+  if (field === 'compound' && value.trim() && !allCmpds.includes(value.trim())) {
+    setCustomCmpds(p => [...p, value.trim()]);
+  }
+};
+
+const printBoxLabel = () => {
+    const printWin = window.open('', '_blank');
+    let html = `<!DOCTYPE html><html><head><title>Label Print</title><style>
+        @page { size: 12cm 12cm; margin: 0; }
+        body { font-family: 'Inter', sans-serif; padding: 15px; font-size: 11px; color: #000; box-sizing: border-box; width: 12cm; height: 12cm; }
+        h3 { margin-top: 0; margin-bottom: 10px; font-size: 14px; border-bottom: 1px solid #000; padding-bottom: 5px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid #000; padding: 4px; text-align: left; }
+        th { background-color: #f3f4f6; }
+    </style></head><body>
+    <h3>Storage: ${activePlateData.storageType || 'Unassigned'} - ${activePlateData.storageLabel || 'N/A'}</h3>
+    <p><strong>Box/Experiment:</strong> ${activePlateData.name}</p>
+    <table><tr><th>Pos</th><th>Compound</th><th>Conc.</th><th>Vol.</th><th>Date</th><th>Wt(mg)</th><th>Description</th></tr>`;
+
+    const sortedWells = [...selectedWells].sort((a,b) => a.r === b.r ? a.c - b.c : a.r - b.r);
+    sortedWells.forEach(({r, c}) => {
+        const d = getWellData(r, c);
+        const pos = `${BOX_ROW_LABELS[r]}${c+1}`;
+        html += `<tr><td>${pos}</td><td>${d.compound}</td><td>${d.concentration}</td><td>${d.volume}</td><td>${d.date}</td><td>${d.weight}</td><td>${d.description}</td></tr>`;
+    });
+
+    html += `</table></body></html>`;
+    printWin.document.write(html);
+    printWin.document.close();
+    printWin.focus();
+    setTimeout(() => { printWin.print(); printWin.close(); }, 250);
+  };
+
+const defaultTitle = useMemo(() => {
+const parts = [];
+if (expTypes && expTypes.length > 0) parts.push(expTypes.join('/'));
+if (cellLines && cellLines.length > 0) parts.push(cellLines.join('/'));
+const activeCompounds = new Set();
+plates.forEach(p => {
+(p.compounds||[]).forEach(c => { if(c && !['cells','medium','pbs'].includes(c.toLowerCase())) activeCompounds.add(c); });
+(p.rowCompounds||[]).forEach(c => { if(c && !['cells','medium','pbs'].includes(c.toLowerCase())) activeCompounds.add(c); });
+(p.grid||[]).forEach((row,r) => row.forEach((_,c) => {
+const cfg = p.cellConfig?.[r]?.[c];
+if (cfg?.role && !['cells','medium','pbs'].includes(cfg.role.toLowerCase())) activeCompounds.add(cfg.role);
+}));
+});
+const cmpNames = Array.from(activeCompounds);
+if (cmpNames.length > 0) parts.push(cmpNames.join('/'));
+if (techniques && techniques.length > 0) parts.push(techniques.join('/'));
+return parts.length > 0 ? parts.join(' - ') : 'Untitled Experiment';
+}, [expTypes, cellLines, techniques, plates]);
+const tConc  = parseFloat(String(topConcStr).replace(',','.')) || 0;
+const dFact  = parseFloat(String(dilFactorStr).replace(',','.')) || 1;
+const cOD    = parseFloat(String(ctrlODStr).replace(',','.')) || 0;
+const bgMan  = parseFloat(String(bgManualStr).replace(',','.')) || 0;
+const gOff   = parseFloat(String(glbOffsetStr).replace(',','.')) || 0;
+const fSD    = parseFloat(String(fixedSDStr).replace(',','.')) || 0;
+const eScale = parseFloat(String(errScaleStr).replace(',','.')) || 1;
+const activePlateDim = PLATES_DEF[plateType] || PLATES_DEF['96'];
+const ROWS = ['A','B','C','D','E','F','G','H','I','J','K','L'].slice(0, activePlateDim.rows);
+const COLS = Array.from({length: activePlateDim.cols}, (_, i) => i + 1);
+const allCmpds = [...new Set([...DEF_COMPOUNDS,...customCmpds])];
+const allCellLines = [...new Set([...DEF_CELL_LINES, ...customCellLines])];
+const editableCmpds = useMemo(() => allCmpds.filter(c => !['cells','medium','pbs'].includes(c.toLowerCase())), [allCmpds]);
+useEffect(() => {
+let newExpTypes = [...(expTypes || [])];
+let newCellLines = [...(cellLines || [])];
+let newTechniques = [...(techniques || [])];
+let newCompoundTypes = [...(compoundTypes || [])];
+let changed = false;
+allCmpds.forEach(t => {
+if((reportTitle + ' ' + reportSubtitle).toLowerCase().includes(t.toLowerCase())) {
+if(!newCompoundTypes.includes(t) && !['cells','medium','pbs'].includes(t.toLowerCase())) {
+newCompoundTypes.push(t); changed=true;
+}
+}
+});
+const textToParse = `${reportTitle} ${reportSubtitle} ${plateName} ${metaComments}`.toLowerCase();
+DEF_EXP_TYPES.forEach(t => { if(textToParse.includes(t.toLowerCase()) && !newExpTypes.includes(t)) { newExpTypes.push(t); changed=true; } });
+allCellLines.forEach(t => { if(textToParse.includes(t.toLowerCase()) && !newCellLines.includes(t)) { newCellLines.push(t); changed=true; } });
+DEF_TECHNIQUES.forEach(t => { if(textToParse.includes(t.toLowerCase()) && !newTechniques.includes(t)) { newTechniques.push(t); changed=true; } });
+if(changed) {
+updatePlate({ expTypes: newExpTypes, cellLines: newCellLines, techniques: newTechniques, compoundTypes: newCompoundTypes });
+}
+}, [reportTitle, reportSubtitle, plateName, metaComments]);
+const latestDataRef = useRef(null);
+const saveTimeoutRef = useRef(null);
+latestDataRef.current = {
+plates, reportTitle, reportSubtitle, customCmpds, customCellLines,
+customConc, cmpColors, manualErrors, chartCfg, topConcStr, dilFactorStr,
+glbOffsetStr, errScaleStr, useFixedSD, fixedSDStr, showViab, fitIC50, showExcl, outlierThreshStr
+};
+const getCompressedPayload = () => LZString.compressToUTF16(JSON.stringify(latestDataRef.current));
+const [expandedGroups, setExpandedGroups] = useState({});
+const toggleGroup = (key) => setExpandedGroups(prev => ({...prev, [key]: !prev[key]}));
+const groupedExperiments = useMemo(() => {
+const groups = {};
+experimentsList.forEach(exp => {
+let expTypesSet = new Set();
+let cellLinesSet = new Set();
+let compoundsSet = new Set();
+try {
+const s = parsePayload(exp);
+if (s) {
+const pList = s.plates || [];
+pList.forEach(p => {
+(p.expTypes || []).forEach(e => expTypesSet.add(e));
+(p.cellLines || []).forEach(e => cellLinesSet.add(e));
+(p.compounds || []).forEach(c => { if(c && !['cells','medium','pbs'].includes(c.toLowerCase())) compoundsSet.add(c); });
+(p.rowCompounds || []).forEach(c => { if(c && !['cells','medium','pbs'].includes(c.toLowerCase())) compoundsSet.add(c); });
+(p.grid || []).forEach((row,r) => row.forEach((_,c) => {
+const cfg = p.cellConfig?.[r]?.[c];
+if (cfg?.role && !['cells','medium','pbs'].includes(cfg.role.toLowerCase())) compoundsSet.add(cfg.role);
+}));
+});
+}
+} catch(e) {}
+const eStr = Array.from(expTypesSet).sort().join(', ');
+const cStr = Array.from(cellLinesSet).sort().join(', ');
+const cmpStr = Array.from(compoundsSet).sort().join(', ');
+const hasMeta = eStr || cStr || cmpStr;
+const key = hasMeta ? `${eStr}|${cStr}|${cmpStr}` : `unclassified_${exp.id}`;
+if (!groups[key]) {
+groups[key] = {
+key, expTypes: eStr, cellLines: cStr, compounds: cmpStr,
+isUnclassified: !hasMeta, items: []
+};
+}
+groups[key].items.push(exp);
+});
+Object.values(groups).forEach(g => {
+g.items.sort((a,b) => new Date(b.date || 0) - new Date(a.date || 0));
+});
+return groups;
+}, [experimentsList]);
+useEffect(() => {
+if (!auth) return;
+const initAuth = async () => {
+try {
+if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+try { await auth.signInWithCustomToken(__initial_auth_token); }
+catch(err) { console.warn("Custom token mismatch, falling back to anonymous.", err); await auth.signInAnonymously(); }
+} else { await auth.signInAnonymously(); }
+} catch(e) { console.error("Auth error", e); }
+};
+initAuth();
+const unsubscribe = auth.onAuthStateChanged(setUser);
+return () => unsubscribe();
+}, []);
+useEffect(() => {
+if (db && user) {
+const collRef = db.collection(`artifacts/${appId}/public/data/experiments`);
+const unsubscribe = collRef.onSnapshot((snap) => {
+const exps = [];
+snap.forEach(doc => { exps.push({ id: doc.id, ...doc.data() }); });
+exps.sort((a,b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+setExperimentsList(exps);
+setIsCloudReady(true);
+}, (err) => { console.error("Firestore sync error:", err); setIsCloudReady(true); });
+return () => unsubscribe();
+} else if (!db) {
+try {
+const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
+if (stored) setExperimentsList(JSON.parse(stored).sort((a,b) => (b.updatedAt || 0) - (a.updatedAt || 0)));
+setIsCloudReady(true);
+} catch (e) { setIsCloudReady(true); }
+}
+}, [user, db]);
+useEffect(() => {
+if (!isCloudReady || appView !== 'editor' || !currentDocId) return;
+setSaveStatus('saving');
+if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+saveTimeoutRef.current = setTimeout(async () => {
+try {
+const updatedPayload = {
+title: reportTitle || defaultTitle, subtitle: reportSubtitle || '',
+date: plates[0]?.date || new Date().toISOString().split('T')[0],
+plateCount: plates.length, updatedAt: Date.now(),
+payload: getCompressedPayload(),
+isCompressed: true
+};
+if (db && user) {
+const docRef = db.collection(`artifacts/${appId}/public/data/experiments`).doc(currentDocId);
+await docRef.set(updatedPayload, { merge: true }).then(() => {
+setSaveStatus('saved');
+setSaveErrorMsg('');
+}).catch(err => {
+setSaveStatus('error');
+if(err.code === 'resource-exhausted' || (err.message && err.message.includes('exceeds'))) {
+setSaveErrorMsg('Data too large (>1MB). Try deleting huge images.');
+} else { setSaveErrorMsg(err.message); }
+});
+} else {
+let stored = [];
+try { stored = JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY) || '[]'); } catch(e){}
+const existingIdx = stored.findIndex(e => e.id === currentDocId);
+const newExp = { id: currentDocId, ...updatedPayload };
+if (existingIdx >= 0) stored[existingIdx] = { ...stored[existingIdx], ...newExp }; else stored.push(newExp);
+localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(stored));
+setExperimentsList([...stored].sort((a,b) => (b.updatedAt || 0) - (a.updatedAt || 0)));
+setSaveStatus('saved');
+}
+} catch(e) {
+console.error("Save error", e);
+setSaveStatus('error');
+setSaveErrorMsg(e.message);
+}
+}, 1500);
+}, [plates, reportTitle, reportSubtitle, customCmpds, customCellLines, customConc, cmpColors, manualErrors, chartCfg, topConcStr, dilFactorStr, glbOffsetStr, errScaleStr, useFixedSD, fixedSDStr, showViab, fitIC50, showExcl, outlierThreshStr, isCloudReady, appView, currentDocId, user, defaultTitle]);
+const handleBackToExplorer = async () => {
+if (currentDocId) {
+setSaveStatus('saving');
+if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+try {
+const updatedPayload = {
+title: reportTitle || defaultTitle, subtitle: reportSubtitle || '',
+date: plates[0]?.date || new Date().toISOString().split('T')[0],
+plateCount: plates.length, updatedAt: Date.now(),
+payload: getCompressedPayload(),
+isCompressed: true
+};
+if (db && user) {
+await db.collection(`artifacts/${appId}/public/data/experiments`).doc(currentDocId).set(updatedPayload, { merge: true }).catch(err => {
+if(err.code === 'resource-exhausted' || err.message.includes('exceeds')) { alert('Save Failed: Data is too large for the cloud (exceeds 1MB limit). Changes may not be saved. Delete huge images.'); } else { throw err; }
+});
+} else {
+let stored = [];
+try { stored = JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY) || '[]'); } catch(e){}
+const existingIdx = stored.findIndex(e => e.id === currentDocId);
+const newExp = { id: currentDocId, ...updatedPayload };
+if (existingIdx >= 0) stored[existingIdx] = { ...stored[existingIdx], ...newExp }; else stored.push(newExp);
+localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(stored));
+setExperimentsList([...stored].sort((a,b) => (b.updatedAt || 0) - (a.updatedAt || 0)));
+}
+} catch(e) {}
+}
+setAppView('explorer');
+};
+const createNewExperiment = async () => {
+const newId = 'exp_' + Date.now();
+const freshPlates = [createEmptyPlate('p1', 1)];
+setReactPlates(freshPlates);
+historyRef.current = [freshPlates];
+setHistoryIndex(0);
+setActivePlateId('p1');
+setReportTitle(''); setReportSubtitle(''); setCustomCmpds([]); setCustomCellLines([]);
+setCustomConc({}); setManualErrors({}); setCurrentDocId(newId); setAppView('editor');
+const updatedPayload = {
+title: 'Untitled Experiment', date: new Date().toISOString().split('T')[0], createdAt: Date.now(), updatedAt: Date.now(),
+payload: LZString.compressToUTF16(JSON.stringify({ plates: freshPlates })),
+isCompressed: true
+};
+if(db && user) { await db.collection(`artifacts/${appId}/public/data/experiments`).doc(newId).set(updatedPayload); }
+else {
+let stored = [];
+try { stored = JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY) || '[]'); } catch(e){}
+stored.push({ id: newId, ...updatedPayload });
+localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(stored));
+setExperimentsList([...stored].sort((a,b) => (b.updatedAt || 0) - (a.updatedAt || 0)));
+}
+};
+const handleSaveAsNew = async () => {
+setSaveStatus('saving');
+const newId = 'exp_' + Date.now();
+const updatedPayload = {
+title: reportTitle || defaultTitle, subtitle: reportSubtitle || '',
+date: plates[0]?.date || new Date().toISOString().split('T')[0],
+plateCount: plates.length, updatedAt: Date.now(), createdAt: Date.now(),
+payload: getCompressedPayload(),
+isCompressed: true
+};
+try {
+if (db && user) {
+await db.collection(`artifacts/${appId}/public/data/experiments`).doc(newId).set(updatedPayload);
+} else {
+let stored = [];
+try { stored = JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY) || '[]'); } catch(e){}
+stored.push({ id: newId, ...updatedPayload });
+localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(stored));
+setExperimentsList([...stored].sort((a,b) => (b.updatedAt || 0) - (a.updatedAt || 0)));
+}
+setCurrentDocId(newId);
+setSaveStatus('saved');
+setSaveErrorMsg('');
+setDialog({type: 'alert', title: 'Saved as New', message: 'Successfully cloned to a new cloud experiment.'});
+} catch (err) {
+setSaveStatus('error');
+if(err.code === 'resource-exhausted' || (err.message && err.message.includes('exceeds'))) {
+setSaveErrorMsg('Data too large (>1MB). Remove images.');
+setDialog({type: 'alert', title: 'Save Failed', message: 'The file is too large to save to the cloud (exceeds 1MB limit). Please remove embedded images and replace them with Google Drive links.'});
+} else {
+setSaveErrorMsg(err.message);
+setDialog({type: 'alert', title: 'Save Failed', message: err.message});
+}
+}
+};
+const exportXLS = () => {
+try {
+const wb = XLSX.utils.book_new();
+const rawAoa = [['', ...COLS]];
+ROWS.forEach((rl, r) => { rawAoa.push([rl, ...COLS.map((_, c) => { const v = grid[r][c]; return plateType === '9x9box' ? v : (v === '' ? '' : Number(v)); })]); });
+XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rawAoa), plateType === '9x9box' ? 'Inventory Data' : 'Raw OD');
+
+if (plateType !== '9x9box') {
+const viabAoa = [['', ...COLS]];
+ROWS.forEach((rl, r) => { viabAoa.push([rl, ...COLS.map((_, c) => {
+const n = rawOD(r, c);
+if (isNaN(n) || cellConfig[r][c].excluded) return '';
+return Number(viability(n).toFixed(2));
+})]); });
+XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(viabAoa), 'Viability %');
+const mapAoa = [['', ...COLS]];
+ROWS.forEach((rl, r) => { mapAoa.push([rl, ...COLS.map((_, c) => {
+const role = getRole(r, c);
+if (!role) return '';
+const conc = concOf(r, c, role);
+return conc > 0 ? `${role} @ ${formatConc(conc)} ${unit}` : role;
+})]); });
+XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(mapAoa), 'Well Map');
+const drAoa = [['Region', 'Compound', `Concentration (${unit})`, 'Log10(Conc)', 'Mean Viability (%)', 'SD', 'N']];
+Object.entries(processedByRegion).forEach(([reg, comps]) => {
+comps.forEach(cd => {
+cd.vPts.forEach(pt => {
+drAoa.push([
+reg, cd.name, Number(pt.realX.toFixed(4)), Number(pt.x.toFixed(4)), Number(pt.y.toFixed(2)), Number(pt.sd.toFixed(4)), pt.pts ? pt.pts.length : 1
+]);
+});
+});
+});
+XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(drAoa), 'Dose-Response Data');
+const summaryAoa = [['Region', 'Compound', `IC50 (${unit})`, 'Hill Slope', `SE (${unit})`]];
+Object.entries(processedByRegion).forEach(([reg, comps]) => {
+comps.forEach(cd => { if (cd.fit) summaryAoa.push([reg, cd.name, Number(cd.fit.ic50.toFixed(4)), Number(cd.fit.hill.toFixed(4)), Number(cd.fit.se.toFixed(4))]); });
+});
+XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryAoa), 'IC50 Summary');
+}
+const fname = `${(reportTitle || defaultTitle || 'experiment').replace(/[^a-z0-9]+/gi, '_')}.xlsx`;
+XLSX.writeFile(wb, fname);
+} catch (e) {
+console.error(e);
+setDialog({ type: 'alert', title: 'Export Failed', message: 'Could not generate Excel file: ' + e.message });
+}
+};
+const exportPDF = async () => {
+const el = document.getElementById('report-container');
+if (!el) return;
+const loader = document.getElementById('loader');
+const loaderText = document.getElementById('loader-text');
+if (loader) loader.style.display = 'flex';
+if (loaderText) loaderText.innerText = 'Generating PDF...';
+
+const fixedEls = document.querySelectorAll('.fixed, [style*="position: fixed"]');
+fixedEls.forEach(el => el.style.display = 'none');
+
+el.classList.add('pdf-mode');
+window.scrollTo(0, 0);
+await new Promise(r => setTimeout(r, 500));
+
+try {
+const canvas = await html2canvas(el, {
+scale: 2, useCORS: true, allowTaint: true, backgroundColor: '#ffffff', logging: false, imageTimeout: 15000, removeContainer: true
+});
+const imgData = canvas.toDataURL('image/jpeg', 0.92);
+const { jsPDF } = window.jspdf;
+const pdf = new jsPDF('p', 'pt', 'a4');
+const pageWidth = pdf.internal.pageSize.getWidth();
+const pageHeight = pdf.internal.pageSize.getHeight();
+const imgWidth = pageWidth;
+const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+let heightLeft = imgHeight;
+let position = 0;
+
+pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
+heightLeft -= pageHeight;
+
+while (heightLeft > 0) {
+position = heightLeft - imgHeight;
+pdf.addPage();
+pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
+heightLeft -= pageHeight;
+}
+pdf.save(`${(reportTitle || defaultTitle || 'experiment').replace(/[^a-z0-9]+/gi, '_')}.pdf`);
+} catch (e) {
+console.error(e);
+setDialog({ type: 'alert', title: 'Export Failed', message: 'Could not generate PDF: ' + e.message });
+} finally {
+el.classList.remove('pdf-mode');
+fixedEls.forEach(el => el.style.display = '');
+if (loader) loader.style.display = 'none';
+}
+};
+const exportHTML = () => {
+try {
+const payload = getCompressedPayload();
+const dataBlob = { payload, isCompressed: true, title: reportTitle || defaultTitle, subtitle: reportSubtitle || '', savedAt: Date.now() };
+const clone = document.documentElement.cloneNode(true);
+const oldTag = clone.querySelector('#saved-data-blob');
+if (oldTag) oldTag.remove();
+const oldLoader = clone.querySelector('#loader');
+if (oldLoader) oldLoader.style.display = 'none';
+const tag = document.createElement('script');
+tag.id = 'saved-data-blob';
+tag.type = 'application/json';
+tag.textContent = JSON.stringify(dataBlob);
+clone.querySelector('body').appendChild(tag);
+const htmlStr = '<!DOCTYPE html>\n' + clone.outerHTML;
+const blob = new Blob([htmlStr], { type: 'text/html' });
+const url = URL.createObjectURL(blob);
+const a = document.createElement('a');
+a.href = url;
+a.download = `${(reportTitle || defaultTitle || 'experiment').replace(/[^a-z0-9]+/gi, '_')}.html`;
+document.body.appendChild(a);
+a.click();
+document.body.removeChild(a);
+setTimeout(() => URL.revokeObjectURL(url), 1000);
+} catch (e) {
+console.error(e);
+setDialog({ type: 'alert', title: 'Save Failed', message: 'Could not save HTML file: ' + e.message });
+}
+};
+const loadHTML = (e) => {
+const file = e.target.files && e.target.files[0];
+if (!file) return;
+if (file.size > 900000) {
+setDialog({type: 'alert', title: 'Large File Warning', message: 'This file is very large. After loading, saving it to the cloud might fail due to the 1MB limit. Consider removing embedded images.'});
+}
+const reader = new FileReader();
+reader.onload = (ev) => {
+try {
+const text = ev.target.result;
+let s = null;
+let loadedPlates = [];
+const newMatch = text.match(/<script[^>]*id=["']saved-data-blob["'][^>]*>([\s\S]*?)<\/script>/);
+if (newMatch) {
+const dataBlob = JSON.parse(newMatch[1]);
+let pStr = dataBlob.payload;
+if (dataBlob.isCompressed) {
+const dec = LZString.decompressFromUTF16(pStr);
+if (dec) pStr = dec;
+}
+s = JSON.parse(pStr);
+if (!s.plates || !s.plates.length) {
+setDialog({ type: 'alert', title: 'Load Failed', message: 'No plates found in this file.' });
+return;
+}
+loadedPlates = s.plates;
+} else {
+setDialog({ type: 'alert', title: 'Load Failed', message: 'No experiment data found in this HTML file.' });
+return;
+}
+loadedPlates = loadedPlates.map(p => {
+let safeComments = p.comments || '';
+safeComments = safeComments.replace(/<img[^>]+src="data:image\/[^;]+;base64,([^">]{500000,})"[^>]*>/gi, '<br/><span style="color:red; font-size:10px; font-weight:bold;">[Massive image removed to prevent cloud save crash]</span><br/>');
+let safeImages = (p.images || []).filter(img => !(img.startsWith('data:image/') && img.length > 500000));
+let legacyImage = p.image && p.image.startsWith('data:image/') && p.image.length > 500000 ? null : p.image;
+return { ...p, comments: safeComments, images: safeImages, image: legacyImage };
+});
+setPendingLoad({ plates: loadedPlates, fullState: s });
+} catch (err) {
+console.error(err);
+setDialog({ type: 'alert', title: 'Load Failed', message: 'Could not read this file: ' + err.message });
+}
+};
+reader.readAsText(file);
+e.target.value = '';
+};
+const openExperiment = (exp) => {
+const s = parsePayload(exp);
+if (!s) return;
+try {
+if (s.plates) setReactPlates(s.plates);
+if (s.reportTitle !== undefined) setReportTitle(s.reportTitle);
+if (s.reportSubtitle !== undefined) setReportSubtitle(s.reportSubtitle);
+if (s.customCmpds) setCustomCmpds(s.customCmpds);
+if (s.customCellLines) setCustomCellLines(s.customCellLines);
+if (s.customConc) setCustomConc(s.customConc);
+if (s.cmpColors) setCmpColors(s.cmpColors);
+if (s.manualErrors) setManualErrors(s.manualErrors);
+if (s.chartCfg) setChartCfg(s.chartCfg);
+if (s.topConcStr !== undefined) setTopConcStr(s.topConcStr);
+if (s.dilFactorStr !== undefined) setDilFactorStr(s.dilFactorStr);
+if (s.glbOffsetStr !== undefined) setGlbOffsetStr(s.glbOffsetStr);
+if (s.errScaleStr !== undefined) setErrScaleStr(s.errScaleStr);
+if (s.useFixedSD !== undefined) setUseFixedSD(s.useFixedSD);
+if (s.fixedSDStr !== undefined) setFixedSDStr(s.fixedSDStr);
+if (s.showViab !== undefined) setShowViab(s.showViab);
+if (s.fitIC50 !== undefined) setFitIC50(s.fitIC50);
+if (s.showExcl !== undefined) setShowExcl(s.showExcl);
+if (s.outlierThreshStr !== undefined) setOutlierThreshStr(s.outlierThreshStr);
+historyRef.current = [s.plates || []]; setHistoryIndex(0);
+setCurrentDocId(exp.id); setActivePlateId(s.plates[0]?.id || 'p1'); setAppView('editor');
+} catch(e) { console.error("Error loading experiment", e); setDialog({type: 'alert', message: "Error reading file data."}); }
+};
+const deleteExperiment = (e, id) => {
+e.stopPropagation();
+setDialog({
+type: 'confirm', title: 'Delete Experiment', message: 'Are you sure you want to delete this entire experiment?',
+onConfirm: async () => {
+if(db && user) { await db.collection(`artifacts/${appId}/public/data/experiments`).doc(id).delete(); }
+else {
+let stored = [];
+try { stored = JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY) || '[]'); } catch(e){}
+stored = stored.filter(exp => exp.id !== id);
+localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(stored));
+setExperimentsList(stored);
+}
+}
+});
+};
+const renameExperiment = (e, id, currentTitle) => {
+e.stopPropagation();
+setDialog({
+type: 'prompt', title: 'Rename Experiment', message: 'Enter a new title for this experiment:', defaultValue: currentTitle,
+onConfirm: async (newTitle) => {
+if (newTitle && newTitle.trim() !== currentTitle) {
+if (db && user) {
+await db.collection(`artifacts/${appId}/public/data/experiments`).doc(id).update({ title: newTitle.trim() });
+} else {
+let stored = [];
+try { stored = JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY) || '[]'); } catch(e){}
+const idx = stored.findIndex(exp => exp.id === id);
+if (idx >= 0) {
+stored[idx].title = newTitle.trim();
+localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(stored));
+setExperimentsList(stored);
+}
+}
+}
+}
+});
+};
+const movePlate = (id, direction) => {
+setPlates(prev => {
+const groupName = prev.find(p=>p.id===id)?.name;
+const groupPlates = prev.filter(p=>p.name === groupName);
+const idxInGroup = groupPlates.findIndex(p=>p.id===id);
+if(idxInGroup < 0) return prev;
+let swapId = null;
+if(direction === 'left' && idxInGroup > 0) swapId = groupPlates[idxInGroup-1].id;
+if(direction === 'right' && idxInGroup < groupPlates.length - 1) swapId = groupPlates[idxInGroup+1].id;
+if(!swapId) return prev;
+const globalIdx1 = prev.findIndex(p=>p.id===id);
+const globalIdx2 = prev.findIndex(p=>p.id===swapId);
+const arr = [...prev];
+[arr[globalIdx1], arr[globalIdx2]] = [arr[globalIdx2], arr[globalIdx1]];
+return arr;
+});
+};
+const formatUrlName = (url) => {
+try {
+const parsedUrl = new URL(url);
+if (parsedUrl.hostname.includes('drive.google.com') || parsedUrl.hostname.includes('docs.google.com')) {
+const match = url.match(/[-\w]{25,}/);
+const id = match ? match[0].substring(0, 6) + '...' : 'Unknown';
+if (parsedUrl.pathname.includes('/folder')) return `Drive Folder (${id})`;
+if (parsedUrl.hostname.includes('docs.google.com/spreadsheets')) return `Sheet (${id})`;
+if (parsedUrl.hostname.includes('docs.google.com/document')) return `Doc (${id})`;
+if (parsedUrl.hostname.includes('docs.google.com/presentation')) return `Slide (${id})`;
+return `Drive File (${id})`;
+}
+const pathParts = parsedUrl.pathname.split('/');
+const lastPart = pathParts[pathParts.length - 1];
+return lastPart ? lastPart : parsedUrl.hostname;
+} catch (e) {
+return url.length > 30 ? url.substring(0, 30) + '...' : url;
+}
+};
+const addImageLink = () => {
+setDialog({
+type: 'prompt', title: 'Add Image Link(s)', message: 'Paste direct link(s) to images (separated by space or comma):',
+onConfirm: (inputString) => {
+if(inputString && inputString.trim()) {
+const urls = inputString.split(/[\s,]+/).filter(url => url.trim() !== '');
+updatePlate({images: [...displayImages, ...urls], image: null});
+}
+}
+});
+};
+const addDocumentLink = () => {
+setDialog({
+type: 'prompt', title: 'Add Document Link(s)', message: 'Paste link(s) to your documents (separated by space or comma):',
+onConfirm: (inputString) => {
+if(inputString && inputString.trim()) {
+const urls = inputString.split(/[\s,]+/).filter(url => url.trim() !== '');
+const newDocs = urls.map(url => ({
+id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
+name: formatUrlName(url),
+type: 'link', data: url
+}));
+updatePlate({ documents: [...(documents || []), ...newDocs] });
+}
+}
+});
+};
+const renameDocument = (id, currentName) => {
+setDialog({
+type: 'prompt', title: 'Rename Document Link', message: 'Enter a display name for this link:', defaultValue: currentName,
+onConfirm: (newName) => {
+if (newName && newName.trim()) {
+updatePlate({ documents: documents.map(d => d.id === id ? {...d, name: newName.trim()} : d) });
+}
+}
+});
+};
+const removeDocument = (id) => updatePlate({ documents: documents.filter(d => d.id !== id) });
+const renameRegion = (oldName) => {
+setDialog({
+type: 'prompt', title: 'Rename Region', message: `Rename region "${oldName}" to:`, defaultValue: oldName,
+onConfirm: (newName) => {
+if (newName && newName.trim() && newName.trim() !== oldName) {
+const finalName = newName.trim();
+const nc = cellConfig.map(row => row.map(c => ({...c})));
+for (let r=0; r<activePlateDim.rows; r++) {
+for (let c=0; c<activePlateDim.cols; c++) {
+if (nc[r][c].region === oldName) nc[r][c].region = finalName;
+}
+}
+updatePlate({ cellConfig: nc });
+}
+}
+});
+}
+const fetchWithRetry = async (url, options, retries = 5) => {
+    const delays = [1000, 2000, 4000, 8000, 16000];
+    for (let i = 0; i < retries; i++) {
+        try {
+            const res = await fetch(url, options);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res;
+        } catch (err) {
+            if (i === retries - 1) throw err;
+            await new Promise(r => setTimeout(r, delays[i]));
+        }
+    }
+};
+
+const handleAIImageUpload = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setIsReadingAI(true);
+    try {
+        const base64 = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target.result.split(',')[1]);
+            reader.readAsDataURL(file);
+        });
+
+        const apiKey = "AQ.Ab8RN6I7-6yNsQyx8f39A4YT6Hp5jNWxz2JCxq2ZEwJ5Zhy1aQ";
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
+        const payload = {
+            contents: [{
+                role: "user",
+                parts: [
+                    { text: "Analyze this image of a 9x9 cryo box or vial box. Read the text on the labels of the vials or eppendorfs. Return a JSON object mapping the grid coordinate (e.g. 'A1', 'B5', 'I9') to the text written on the label. Only include vials where you can read the text. Rows are typically A-I top to bottom, cols 1-9 left to right. Provide ONLY the raw JSON without formatting or markdown." },
+                    { inlineData: { mimeType: file.type, data: base64 } }
+                ]
+            }],
+            generationConfig: { responseMimeType: "application/json" }
+        };
+
+        const response = await fetchWithRetry(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+        const jsonText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!jsonText) throw new Error("No response from AI");
+
+        const parsed = JSON.parse(jsonText);
+        const ng = grid.map(row => [...row]);
+
+        Object.entries(parsed).forEach(([coord, text]) => {
+            const cleanCoord = coord.trim().toUpperCase();
+            if(cleanCoord.length >= 2) {
+                const rLabel = cleanCoord.charAt(0);
+                const cLabel = parseInt(cleanCoord.substring(1)) - 1;
+                const rIdx = BOX_ROW_LABELS.indexOf(rLabel);
+                if (rIdx >= 0 && rIdx < (activePlateData.boxRows || 9) && cLabel >= 0 && cLabel < (activePlateData.boxCols || 9)) {
+                    const current = getWellData(rIdx, cLabel);
+                    current.compound = String(text);
+                    ng[rIdx][cLabel] = JSON.stringify(current);
+                }
+            }
+        });
+        updatePlate({ grid: ng });
+        setDialog({ type: 'alert', title: 'AI Read Complete', message: 'Successfully populated the box from the image.' });
+
+    } catch (err) {
+        console.error(err);
+        setDialog({ type: 'alert', title: 'AI Error', message: 'Failed to read labels: ' + err.message });
+    } finally {
+        setIsReadingAI(false);
+        e.target.value = '';
+    }
+};
+
+const [drWidth, setDrWidth] = useState(55);
+const [chartH, setChartH] = useState(530);
+const [mapFontSize, setMapFontSize] = useState(9);
+const [ctxMenu, setCtxMenu] = useState(null);
+const [focusedCell, setFocusedCell] = useState(null);
+const [hiddenCmpds, setHiddenCmpds] = useState({});
+const [showChartCfg, setShowChartCfg] = useState(false);
+const [showErrPanel, setShowErrPanel] = useState(false);
+const [fsPanel, setFsPanel] = useState(null);
+const toggleFs = (id) => setFsPanel(prev => prev === id ? null : id);
+const mapBadgePx = Math.max(22, Math.round(mapFontSize * 3.4));
+const mapSizeClass = `w-[${mapBadgePx}px] h-[${mapBadgePx}px]`;
+const [zoomImage, setZoomImage] = useState(null);
+const [tableView, setTableView] = useState('od');
+const [selStart, setSelStart] = useState(null);
+const [selEnd, setSelEnd] = useState(null);
+const [fillEnd, setFillEnd] = useState(null);
+const [dragMode, setDragMode] = useState('none');
+const [regionModal, setRegionModal] = useState(null);
+const [appClipboard, setAppClipboard] = useState(null);
+const [dragState, setDragState] = useState({ active: false, startR: -1, startC: -1, currentR: -1, currentC: -1 });
+const activeSel = selStart && selEnd ? {
+minR: Math.min(selStart.r, selEnd.r), maxR: Math.max(selStart.r, selEnd.r),
+minC: Math.min(selStart.c, selEnd.c), maxC: Math.max(selStart.c, selEnd.c),
+} : null;
+const currentSelectionBox = useMemo(() => {
+if (dragState.active) {
+return {
+minR: Math.min(dragState.startR, dragState.currentR), maxR: Math.max(dragState.startR, dragState.currentR),
+minC: Math.min(dragState.startC, dragState.currentC), maxC: Math.max(dragState.startC, dragState.currentC),
+};
+}
+return activeSel;
+}, [dragState, activeSel]);
+const activeFill = currentSelectionBox && fillEnd ? {
+minR: Math.min(currentSelectionBox.minR, fillEnd.r), maxR: Math.max(currentSelectionBox.maxR, fillEnd.r),
+minC: Math.min(currentSelectionBox.minC, fillEnd.c), maxC: Math.max(currentSelectionBox.maxC, fillEnd.c),
+} : null;
+const [currentMonth, setCurrentMonth] = useState(() => { const d = new Date(); d.setDate(1); return d; });
+const [calFilterDate, setCalFilterDate] = useState(null);
+const filteredPlates = useMemo(() => {
+if (!searchQuery) return plates;
+const q = searchQuery.toLowerCase();
+return plates.filter(p =>
+p.name.toLowerCase().includes(q) ||
+(p.cellLines && p.cellLines.some(c => c.toLowerCase().includes(q))) ||
+(p.expTypes && p.expTypes.some(e => e.toLowerCase().includes(q))) ||
+(p.techniques && p.techniques.some(t => t.toLowerCase().includes(q))) ||
+(p.compoundTypes && p.compoundTypes.some(c => c.toLowerCase().includes(q)))
+);
+}, [plates, searchQuery]);
+const plateGroups = useMemo(() => {
+const g = {};
+filteredPlates.forEach(p => {
+const name = p.name || 'Unnamed';
+if(!g[name]) g[name] = [];
+g[name].push(p);
+});
+Object.values(g).forEach(arr => arr.sort((a,b) => (a.date || '').localeCompare(b.date || '')));
+return g;
+}, [filteredPlates]);
+const activeGroupName = plates.find(p => p.id === activePlateId)?.name || 'Unnamed';
+const mergedPlan = useMemo(() => {
+const all = [];
+plates.forEach(p => {
+(p.plan || []).forEach(task => { all.push({ ...task, plateName: p.name, plateId: p.id }); });
+});
+const sorted = all.sort((a, b) => a.date.localeCompare(b.date));
+if (calFilterDate) return sorted.filter(t => t.date === calFilterDate);
+return sorted;
+}, [plates, calFilterDate]);
+const agendaGrouped = useMemo(() => {
+const sorted = [...mergedPlan].sort((a, b) => a.date.localeCompare(b.date));
+return sorted.reduce((acc, t) => {
+acc[t.date] = acc[t.date] || [];
+acc[t.date].push(t);
+return acc;
+}, {});
+}, [mergedPlan]);
+const daysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
+const firstDayOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getDay();
+const startDayOffset = firstDayOfMonth === 0 ? 6 : firstDayOfMonth - 1;
+const totalDays = daysInMonth(currentMonth.getFullYear(), currentMonth.getMonth());
+const monthName = currentMonth.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+const handlePrevMonth = () => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1));
+const handleNextMonth = () => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1));
+useEffect(()=>{ const h=()=>setCtxMenu(null); document.addEventListener('click',h); return ()=>document.removeEventListener('click',h); },[]);
+useEffect(()=>{ const h=e=>{ if(e.key==='Escape') setZoomImage(null); }; document.addEventListener('keydown',h); return ()=>document.removeEventListener('keydown',h); },[]);
+useEffect(() => {
+const handleMouseUpGlobal = () => {
+if (dragState.active) {
+const { startR, startC, currentR, currentC } = dragState;
+setDragState({ active: false, startR: -1, startC: -1, currentR: -1, currentC: -1 });
+const minR = Math.min(startR, currentR);
+const maxR = Math.max(startR, currentR);
+const minC = Math.min(startC, currentC);
+const maxC = Math.max(startC, currentC);
+setRegionModal({ minR, maxR, minC, maxC, defaultName: 'Region ' + (Object.keys(processedByRegion).length + 1) });
+}
+if (dragMode === 'selecting' && tableView === 'region' && activeSel) {
+setRegionModal({ minR: activeSel.minR, maxR: activeSel.maxR, minC: activeSel.minC, maxC: activeSel.maxC, defaultName: 'Region ' + (Object.keys(processedByRegion).length + 1) });
+} else if (dragMode === 'filling' && activeFill && activeSel) {
+const nGrid = grid.map(row=>[...row]);
+const nCell = cellConfig.map(row=>row.map(cell=>({...cell})));
+for(let r = activeFill.minR; r <= activeFill.maxR; r++) {
+for(let c = activeFill.minC; c <= activeFill.maxC; c++) {
+const srcR = activeSel.minR + ((r - activeSel.minR) % (activeSel.maxR - activeSel.minR + 1));
+const srcC = activeSel.minC + ((c - activeSel.minC) % (activeSel.maxC - activeSel.minC + 1));
+nGrid[r][c] = grid[srcR][srcC];
+nCell[r][c] = { ...cellConfig[srcR][srcC] };
+}
+}
+updatePlate({ grid: nGrid, cellConfig: nCell });
+setSelStart({r: activeFill.minR, c: activeFill.minC});
+setSelEnd({r: activeFill.maxR, c: activeFill.maxC});
+}
+setDragMode('none');
+setFillEnd(null);
+};
+window.addEventListener('mouseup', handleMouseUpGlobal);
+return () => window.removeEventListener('mouseup', handleMouseUpGlobal);
+}, [dragState, dragMode, activeFill, activeSel, grid, cellConfig, tableView]);
+useEffect(() => {
+const onKeyDown = (e) => {
+if ((e.key === 'Delete' || e.key === 'Backspace') && activeSel) {
+if (document.activeElement.tagName === 'INPUT' && document.activeElement.type === 'text') {
+if (activeSel.minR === activeSel.maxR && activeSel.minC === activeSel.maxC) return;
+}
+const nGrid = grid.map(row=>[...row]);
+const nCell = cellConfig.map(row=>row.map(cell=>({...cell})));
+let changed = false;
+for(let r = activeSel.minR; r <= activeSel.maxR; r++) {
+for(let c = activeSel.minC; c <= activeSel.maxC; c++) {
+if (tableView === 'region') {
+nCell[r][c].region = 'Primary';
+} else {
+nGrid[r][c] = ''; nCell[r][c].role = null; nCell[r][c].conc = null; nCell[r][c].manualOverride = false;
+}
+changed = true;
+}
+}
+if (changed) updatePlate({ grid: nGrid, cellConfig: nCell });
+}
+};
+window.addEventListener('keydown', onKeyDown);
+return () => window.removeEventListener('keydown', onKeyDown);
+}, [activeSel, grid, cellConfig, tableView]);
+const onMouseDownCell = (e, r, c) => {
+if (e.button !== 0) return;
+if (e.target.classList.contains('fill-handle') || e.target.classList.contains('drag-handle')) return;
+if (tableView === 'region') { e.preventDefault(); setDragState({ active: true, startR: r, startC: c, currentR: r, currentC: c }); }
+else { setSelStart({r, c}); setSelEnd({r, c}); setDragMode('selecting'); }
+};
+const onMouseEnterCell = (r, c) => {
+if (dragState.active && tableView === 'region') setDragState(prev => ({ ...prev, currentR: r, currentC: c }));
+else if (dragMode === 'selecting') setSelEnd({r, c});
+else if (dragMode === 'filling') setFillEnd({r, c});
+};
+const onDoubleClickCell = (r, c) => {
+if (tableView !== 'region') return;
+const reg = cellConfig[r][c].region;
+if (!reg || reg === 'Primary') return;
+let minR = r, maxR = r, minC = c, maxC = c;
+grid.forEach((row, ir) => row.forEach((_, ic) => {
+if (cellConfig[ir][ic].region === reg) {
+if (ir < minR) minR = ir;
+if (ir > maxR) maxR = ir;
+if (ic < minC) minC = ic;
+if (ic > maxC) maxC = ic;
+}
+}
+));
+setSelStart({r: minR, c: minC}); setSelEnd({r: maxR, c: maxC}); setDragMode('none');
+};
+const onMouseDownFillHandle = (e) => { e.stopPropagation(); setDragMode('filling'); setFillEnd(selEnd); };
+const handleDrop = (e, r, c) => {
+e.preventDefault();
+try {
+const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+if (data.action === 'copy' && data.sel) {
+const src = data.sel;
+const rOffset = r - src.minR;
+const cOffset = c - src.minC;
+const isMove = !e.ctrlKey && !e.metaKey && !e.shiftKey && data.sourcePlate === activePlateId;
+const nGrid = grid.map(row=>[...row]);
+const nCell = cellConfig.map(row=>row.map(cell=>({...cell})));
+if (isMove) {
+for(let sr = src.minR; sr <= src.maxR; sr++) {
+for(let sc = src.minC; sc <= src.maxC; sc++) {
+if (sr >= 0 && sr < activePlateDim.rows && sc >= 0 && sc < activePlateDim.cols) {
+nGrid[sr][sc] = ''; nCell[sr][sc] = { excluded:false, role:null, conc:null, region:'Primary', manualOverride:false };
+}
+}
+}
+}
+for(let sr = src.minR; sr <= src.maxR; sr++) {
+for(let sc = src.minC; sc <= src.maxC; sc++) {
+const dr = sr + rOffset;
+const dc = sc + cOffset;
+if (dr >= 0 && dr < activePlateDim.rows && dc >= 0 && dc < activePlateDim.cols) {
+nGrid[dr][dc] = data.grid[sr][sc]; nCell[dr][dc] = { ...data.cellConfig[sr][sc] };
+}
+}
+}
+updatePlate({ grid: nGrid, cellConfig: nCell });
+setSelStart({r: Math.max(0, src.minR + rOffset), c: Math.max(0, src.minC + rOffset)});
+setSelEnd({r: Math.min(activePlateDim.rows-1, src.maxR + rOffset), c: Math.min(activePlateDim.cols-1, src.maxC + rOffset)});
+}
+} catch(err) {}
+};
+const handlePasteSpecial = (mode) => {
+if(!appClipboard) return;
+const src = appClipboard.sel; const srcGrid = appClipboard.grid; const srcCell = appClipboard.cellConfig;
+const nGrid = grid.map(row=>[...row]); const nCell = cellConfig.map(row=>row.map(cell=>({...cell})));
+const startR = activeSel ? activeSel.minR : ctxMenu.r; const startC = activeSel ? activeSel.minC : ctxMenu.c;
+let changed = false;
+for(let r=src.minR; r<=src.maxR; r++) {
+for(let c=src.minC; c<=src.maxC; c++) {
+const dr = startR + (r - src.minR); const dc = startC + (c - src.minC);
+if (dr >= 0 && dr < activePlateDim.rows && dc >= 0 && dc < activePlateDim.cols) {
+if (mode === 'all' || mode === 'od') nGrid[dr][dc] = srcGrid[r][c];
+if (mode === 'all' || mode === 'compound') nCell[dr][dc].role = srcCell[r][c].role;
+if (mode === 'all' || mode === 'conc') nCell[dr][dc].conc = srcCell[r][c].conc;
+if (mode === 'all' || mode === 'region') nCell[dr][dc].region = srcCell[r][c].region;
+changed = true;
+}
+}
+}
+if(changed) updatePlate({ grid: nGrid, cellConfig: nCell });
+setCtxMenu(null);
+setSelStart({r: startR, c: startC});
+setSelEnd({r: Math.min(activePlateDim.rows-1, startR + (src.maxR - src.minR)), c: Math.min(activePlateDim.cols-1, startC + (src.maxC - src.minC))});
+};
+const handleContextMenu = (e, r, c) => {
+e.preventDefault();
+setCtxMenu({ x: e.clientX, y: e.clientY, r, c });
+};
+const handlePaste = (ev, r, c) => {
+ev.preventDefault();
+const text = (ev.clipboardData || window.clipboardData).getData('text');
+if (!text) return;
+const lines = text.replace(/\r/g,'').split('\n');
+while (lines.length && lines[lines.length-1] === '') lines.pop();
+const ng = grid.map(row => [...row]);
+let changed = false;
+lines.forEach((line, i) => {
+const cells = line.split('\t');
+cells.forEach((val, j) => {
+const tr = r + i, tc = c + j;
+if (tr >= 0 && tr < activePlateDim.rows && tc >= 0 && tc < activePlateDim.cols) {
+ng[tr][tc] = val.trim();
+changed = true;
+}
+});
+});
+if (changed) updatePlate({ grid: ng });
+};
+const runCtxAction = (fn) => {
+const nc = cellConfig.map(row=>row.map(cell=>({...cell})));
+const nGrid = grid.map(row=>[...row]);
+let inSelection = activeSel && ctxMenu.r >= activeSel.minR && ctxMenu.r <= activeSel.maxR && ctxMenu.c >= activeSel.minC && ctxMenu.c <= activeSel.maxC;
+const minR = inSelection ? activeSel.minR : ctxMenu.r; const maxR = inSelection ? activeSel.maxR : ctxMenu.r;
+const minC = inSelection ? activeSel.minC : ctxMenu.c; const maxC = inSelection ? activeSel.maxC : ctxMenu.c;
+for(let i=minR; i<=maxR; i++) for(let j=minC; j<=maxC; j++) fn(nc, nGrid, i, j);
+updatePlate({ cellConfig: nc, grid: nGrid }); setCtxMenu(null);
+};
+const confirmLoad = (mode) => {
+const { plates: loadedPlates, fullState: s } = pendingLoad;
+if (mode === 'replace') {
+setReactPlates(loadedPlates); historyRef.current = [loadedPlates]; setHistoryIndex(0); setActivePlateId(loadedPlates[0].id);
+if(s.reportTitle !== undefined) setReportTitle(s.reportTitle);
+if(s.reportSubtitle !== undefined) setReportSubtitle(s.reportSubtitle);
+if(s.customCmpds !== undefined) setCustomCmpds(s.customCmpds);
+if(s.customCellLines !== undefined) setCustomCellLines(s.customCellLines);
+if(s.customConc !== undefined) setCustomConc(s.customConc);
+if(s.cmpColors !== undefined) setCmpColors(s.cmpColors);
+if(s.manualErrors !== undefined) setManualErrors(s.manualErrors);
+} else if (mode === 'append') {
+const newPlates = loadedPlates.map(p => ({ ...p, id: 'p' + Math.random().toString(36).substr(2, 9) + Date.now() }));
+setPlates(prev => [...prev, ...newPlates]); setActivePlateId(newPlates[0].id);
+if(s.customCmpds !== undefined) setCustomCmpds(prev => [...new Set([...prev, ...s.customCmpds])]);
+if(s.customCellLines !== undefined) setCustomCellLines(prev => [...new Set([...prev, ...s.customCellLines])]);
+if(s.customConc !== undefined) setCustomConc(prev => ({...prev, ...s.customConc}));
+if(s.cmpColors !== undefined) setCmpColors(prev => ({...prev, ...s.cmpColors}));
+if(s.manualErrors !== undefined) setManualErrors(prev => ({...prev, ...s.manualErrors}));
+}
+setPendingLoad(null);
+};
+const confirmRegion = (name) => {
+const finalName = name.trim() || 'Primary';
+if (regionModal) {
+const { minR, maxR, minC, maxC } = regionModal;
+const nc = cellConfig.map(row => row.map(c => ({...c})));
+for (let r = minR; r <= maxR; r++) for (let c = minC; c <= maxC; c++) nc[r][c].region = finalName;
+updatePlate({ cellConfig: nc });
+setRegionModal(null);
+} else {
+runCtxAction((nc, ng, r, c) => { nc[r][c].region = finalName; });
+}
+};
+const getRole = (r,c) => {
+const cfg=cellConfig[r][c]; if(cfg.role!==null) return cfg.role;
+const rCmp = rowCompounds[r]; const cCmp = compounds[c];
+if (rCmp && !cCmp) return rCmp;
+if (cCmp && !rCmp) return cCmp;
+if (!rCmp && !cCmp) return null;
+const isCtrl = x => ['cells','medium','pbs'].includes(x.toLowerCase());
+if (isCtrl(rCmp) && !isCtrl(cCmp)) return rCmp;
+if (isCtrl(cCmp) && !isCtrl(rCmp)) return cCmp;
+return rCmp;
+};
+const toNum  = v => { const n=parseFloat(typeof v==='string'?v.trim().replace(',','.'):v); return isNaN(n)?NaN:n; };
+const rawOD  = (r,c) => { const n=toNum(grid[r][c]); return isNaN(n)?NaN:n-gOff; };
+const concOf = (r,c,role) => {
+const rl = role!==undefined ? role : getRole(r,c);
+if(!rl || ['cells','medium','pbs'].includes(rl.toLowerCase())) return 0;
+if (cellConfig[r][c].conc !== null && cellConfig[r][c].conc !== undefined) return Number(cellConfig[r][c].conc);
+const s  = (customConc[rl]) ? {top: parseFloat(customConc[rl].top)||0, dil: parseFloat(customConc[rl].dil)||1} : {top:tConc,dil:dFact};
+let isHoriz = false; let step = 0;
+if (rowCompounds[r] === rl) isHoriz = true; else if (compounds[c] === rl) isHoriz = false; else if (rowCompounds.includes(rl)) isHoriz = true;
+if (isHoriz) { for (let i = 0; i < c; i++) { if (getRole(r, i) === rl) step++; } }
+else { for (let i = 0; i < r; i++) { if (getRole(i, c) === rl) step++; } }
+return s.top / Math.pow(s.dil, step);
+};
+const cmpColor = (name, autoIdx) => {
+const stored = cmpColors[name];
+if (stored && /^#[0-9a-f]{6}$/i.test(stored)) return stored.toLowerCase();
+return toHex(PALETTE[autoIdx % PALETTE.length]);
+};
+const plotCmps = useMemo(()=>{
+const s = new Set();
+compounds.forEach((c, i)=>{ if(i<activePlateDim.cols && c&&!['cells','medium','pbs'].includes(c.toLowerCase())) s.add(c); });
+rowCompounds.forEach((c, i)=>{ if(i<activePlateDim.rows && c&&!['cells','medium','pbs'].includes(c.toLowerCase())) s.add(c); });
+grid.forEach((row,r) => row.forEach((_,c) => {
+if(r >= activePlateDim.rows || c >= activePlateDim.cols) return;
+const role = getRole(r,c); if(role && !['cells','medium','pbs'].includes(role.toLowerCase())) s.add(role);
+}));
+return Array.from(s);
+}, [cellConfig, activePlateDim, grid, compounds, rowCompounds]);
+const cmpStats = useMemo(() => {
+const stats = {};
+grid.forEach((row,r) => row.forEach((_,c) => {
+if(r >= activePlateDim.rows || c >= activePlateDim.cols) return;
+const role = getRole(r,c); const conc = concOf(r,c,role);
+if(role && conc > 0) {
+if(!stats[role]) stats[role] = { min: conc, max: conc };
+else { stats[role].min = Math.min(stats[role].min, conc); stats[role].max = Math.max(stats[role].max, conc); }
+}
+}));
+return stats;
+}, [cellConfig, activePlateDim, grid, compounds, rowCompounds, tConc, dFact, customConc]);
+const [bgOD, setBgOD] = useState(0);
+useEffect(()=>{
+if(bgType==='none'){ setBgOD(0); return; }
+if(bgType==='manual'){ setBgOD(bgMan); return; }
+let s=0,n=0;
+grid.forEach((row,r)=>row.forEach((_,c)=>{
+if(r >= activePlateDim.rows || c >= activePlateDim.cols) return;
+const cfg=cellConfig[r][c]; if(cfg.excluded) return;
+if(getRole(r,c)===bgType){ const v=rawOD(r,c); if(!isNaN(v)){s+=v;n++;} }
+}));
+setBgOD(n>0?s/n:0);
+},[grid,cellConfig,bgType,bgMan,gOff,activePlateDim]);
+useEffect(()=>{
+if(ctrlType==='none') return;
+let s=0,n=0;
+grid.forEach((row,r)=>row.forEach((_,c)=>{
+if(r >= activePlateDim.rows || c >= activePlateDim.cols) return;
+const cfg=cellConfig[r][c]; if(cfg.excluded) return;
+if(getRole(r,c)===ctrlType){ const v=rawOD(r,c); if(!isNaN(v)){s+=v;n++;} }
+}));
+if(n>0) updatePlate({ ctrlODStr: (s/n).toFixed(4) });
+},[grid,cellConfig,ctrlType,gOff,activePlateDim]);
+const viability = raw => { const net=raw-bgOD, ctrl=cOD-bgOD; return Math.abs(ctrl)<1e-6 ? 0 : (net/ctrl)*100; };
+const wellColor = (r,c) => {
+const role = getRole(r,c);
+if(!role) return {bg:'#ffffff',dark:true};
+const rl=role.toLowerCase();
+if(rl==='medium') return {bg:'#ff4d6d',dark:false};
+if(rl==='pbs')    return {bg:'#e5e7eb',dark:true};
+if(rl==='cells')  return {bg:'#fef08a',dark:true};
+const idx = allCmpds.indexOf(role);
+const base = cmpColor(role, idx !== -1 ? idx : 0);
+const conc = concOf(r,c,role);
+if(conc <= 0) return {bg: base, dark: needsDarkText(base)};
+const st = cmpStats[role];
+if(!st || st.min === st.max) return {bg: base, dark: needsDarkText(base)};
+const lc=Math.log10(conc), lx=Math.log10(st.max), ln=Math.log10(st.min);
+const frac=lx>ln ? (lc-ln)/(lx-ln) : 0;
+const bg=frac>0.5 ? darken(base,(frac-0.5)*1.0) : lighten(base,(0.5-frac)*0.9);
+return {bg, dark:needsDarkText(bg)};
+};
+const heatColor = (r,c) => {
+const cfg=cellConfig[r][c]; if(cfg.excluded) return 'transparent';
+const v=rawOD(r,c); if(isNaN(v)) return 'transparent';
+const role = getRole(r,c); if(!role) return 'transparent';
+const rl=role.toLowerCase();
+if(rl==='medium') return '#ffe4e6';
+if(rl==='pbs')    return '#f3f4f6';
+if(rl==='cells')  return '#fef9c3';
+const idx=allCmpds.indexOf(role);
+const base=cmpColor(role, idx !== -1 ? idx : 0);
+const vb=Math.max(0,Math.min(100,viability(v)));
+return lighten(base, 0.25 + (vb/100)*0.55);
+};
+const displayVal = (r,c) => {
+const n=rawOD(r,c); if(isNaN(n)) return grid[r][c]===''?'':grid[r][c];
+return showViab ? viability(n).toFixed(1)+'%' : n.toFixed(3);
+};
+const getManual  = (name, realX) => (manualErrors[name] ? manualErrors[name][concKey(realX)] : undefined);
+const hasManual  = (name, realX) => typeof getManual(name,realX) === 'number';
+const effectiveSD = (name, realX, computedSD) => { const m=getManual(name,realX); return typeof m==='number' ? m : computedSD; };
+const storeManual = (name, realX, val) => {
+setManualErrors(prev => { const inner = { ...(prev[name] || {}) }; inner[concKey(realX)] = val; return { ...prev, [name]: inner }; });
+};
+const clearManual = (name, realX) => {
+setManualErrors(prev => {
+const inner = { ...(prev[name] || {}) }; delete inner[concKey(realX)];
+const next = { ...prev }; if (Object.keys(inner).length === 0) delete next[name]; else next[name] = inner;
+return next
+});
+};
+const clearAllManual = (name) => {
+setManualErrors(prev => { const next = { ...prev }; delete next[name]; return next; });
+};
+const autoCalcControl = () => {
+let sumOD = 0; let count = 0;
+allCmpds.forEach(cmp => {
+if(['cells','medium','pbs'].includes(cmp.toLowerCase())) return;
+const pts = [];
+grid.forEach((row,r) => row.forEach((_,c) => {
+if (getRole(r,c) === cmp && !cellConfig[r][c].excluded) {
+const conc = concOf(r,c,cmp);
+const n = rawOD(r,c);
+if (!isNaN(n) && conc > 0) pts.push({conc, od: n});
+}
+}));
+if(pts.length > 0) {
+const minConc = Math.min(...pts.map(p=>p.conc));
+const lowPts = pts.filter(p => p.conc === minConc);
+lowPts.forEach(p => { sumOD += p.od; count++; });
+}
+});
+if(count > 0) {
+updatePlate({ ctrlType: 'none', ctrlODStr: (sumOD / count).toFixed(4) });
+}
+};
+const processedByRegion = useMemo(()=>{
+const byReg = {};
+if (plateType === '9x9box') return {};
+grid.forEach((row,r) => row.forEach((_,c) => {
+if(r >= activePlateDim.rows || c >= activePlateDim.cols) return;
+const reg = cellConfig[r][c].region || 'Primary';
+if(!byReg[reg]) byReg[reg] = [];
+}));
+const result = {};
+Object.keys(byReg).forEach(reg => {
+const comps = plotCmps.map((name) => {
+const pts=[];
+grid.forEach((row,r)=>row.forEach((_,c)=>{
+if(r >= activePlateDim.rows || c >= activePlateDim.cols) return;
+const cfg=cellConfig[r][c];
+if((cfg.region || 'Primary') !== reg || getRole(r,c) !== name) return;
+const n=rawOD(r,c); if(isNaN(n)) return;
+const xc=concOf(r,c,name); if(!(xc>0)) return;
+pts.push({realX:xc,logX:Math.log10(xc),val:viability(n),excl:cfg.excluded,r,c});
+}));
+const byX={};
+pts.forEach(p=>{
+const k = concKey(p.realX); if(!byX[k]) byX[k]={inc:[],excl:[]};
+(p.excl ? byX[k].excl : byX[k].inc).push(p);
+});
+const vPts=[], ePts=[];
+Object.keys(byX).forEach(ks=>{
+const g=byX[ks]; if (g.inc.length === 0 && g.excl.length === 0) return;
+const rep = g.inc[0] || g.excl[0]; const xr=rep.realX, xl=rep.logX;
+if(g.inc.length>0){
+const mean=g.inc.reduce((s,p)=>s+p.val,0)/g.inc.length;
+let sd=0;
+if(useFixedSD) sd=fSD; else if(g.inc.length>1) sd=Math.sqrt(g.inc.reduce((s,p)=>s+Math.pow(p.val-mean,2),0)/(g.inc.length-1));
+vPts.push({x:xl,realX:xr,y:mean,sd:effectiveSD(name,xr,sd),sdRaw:sd,pts:g.inc});
+}
+if(g.excl.length>0) ePts.push({x:xl,realX:xr,y:g.excl.reduce((s,p)=>s+p.val,0)/g.excl.length,pts:g.excl});
+});
+vPts.sort((a,b)=>a.x-b.x); ePts.sort((a,b)=>a.x-b.x);
+if (vPts.length === 0 && ePts.length === 0) return null;
+const color=cmpColor(name, allCmpds.indexOf(name)); let fit=null;
+if(fitIC50&&vPts.length>=3){
+let sumW = 0;
+const fitData = vPts.map(p => { const w = p.sd > 0 ? 1 / (p.sd * p.sd) : 1; sumW += w; return { x: p.realX, y: p.y, w, sd: p.sd }; });
+if(sumW > 0) fitData.forEach(p => p.w = (p.w / sumW) * fitData.length);
+fit=fit4PL(fitData);
+}
+return {name,color,vPts,ePts,fit};
+}).filter(Boolean);
+if (comps.length > 0) result[reg] = comps;
+});
+return result;
+},[grid,cellConfig,activePlateDim,cOD,bgOD,fitIC50,useFixedSD,fSD,gOff,manualErrors,plotCmps,allCmpds,cmpColors,plateType]);
+const autoTouchSD = (region, name) => {
+const compData = (processedByRegion[region] || []).find(c => c.name === name);
+if (!compData || !compData.fit) return;
+let maxRes = 0;
+compData.vPts.forEach(pt => {
+const yFit = 100 / (1 + Math.pow(pt.realX / compData.fit.ic50, compData.fit.hill));
+const res = Math.abs(pt.y - yFit);
+if (res > maxRes) maxRes = res;
+});
+const newSD = Math.ceil((maxRes * 1.02 + 0.01) * 100) / 100;
+setManualErrors(prev => {
+const inner = { ...(prev[name] || {}) };
+compData.vPts.forEach(pt => inner[concKey(pt.realX)] = newSD);
+return { ...prev, [name] : inner };
+});
+};
+const autoTouchAll = () => {
+let updates = {};
+Object.entries(processedByRegion).forEach(([reg, comps]) => {
+comps.forEach(c => {
+if(!c.fit) return;
+let maxRes = 0;
+c.vPts.forEach(pt => {
+const yFit = 100 / (1 + Math.pow(pt.realX / c.fit.ic50, c.fit.hill));
+const res = Math.abs(pt.y - yFit);
+if (res > maxRes) maxRes = res;
+});
+const newSD = Math.ceil((maxRes * 1.02 + 0.01) * 100) / 100;
+if (!updates[c.name]) updates[c.name] = {};
+c.vPts.forEach(pt => updates[c.name][concKey(pt.realX)] = newSD);
+});
+});
+setManualErrors(prev => {
+const next = { ...prev };
+Object.keys(updates).forEach(cmp => {
+next[cmp] = { ...(next[cmp] || {}), ...updates[cmp] };
+});
+return next;
+});
+setUseFixedSD(true);
+};
+const revertNormalSD = () => { setManualErrors({}); setUseFixedSD(false); };
+const forceFixedSD = () => { setUseFixedSD(true); setManualErrors({}); };
+const updateCell = (r,c,v) => { const ng=grid.map(row=>[...row]); ng[r][c]=v; updatePlate({ grid: ng }); };
+const updateCmp  = (c,v) => {
+const role = v; const nc = cellConfig.map(row=>row.map(cell=>({...cell})));
+const oldRole = compounds[c]; const isCtrl = role && ['cells','medium','pbs'].includes(role.toLowerCase());
+if(!role) {
+for(let r=0; r<activePlateDim.rows; r++) { if(nc[r][c].role === oldRole) { nc[r][c].role = null; nc[r][c].conc = null; } }
+} else {
+let step = 0;
+for (let r=0; r<activePlateDim.rows; r++) {
+if (!nc[r][c].role || nc[r][c].role === oldRole) {
+nc[r][c].role = role;
+if(isCtrl) nc[r][c].conc = 0;
+else { const s = customConc[role] || { top: tConc, dil: dFact }; nc[r][c].conc = s.top / Math.pow(s.dil, step); }
+step++;
+}
+}
+}
+const ncc=[...compounds]; ncc[c]=role;
+updatePlate({ cellConfig: nc, compounds: ncc });
+const t=v.trim(); if(t&&!allCmpds.includes(t)) setCustomCmpds(p=>[...p,t]);
+};
+const updateRowCmp  = (r,v) => {
+const role = v; const nc = cellConfig.map(row=>row.map(cell=>({...cell})));
+const oldRole = rowCompounds[r]; const isCtrl = role && ['cells','medium','pbs'].includes(role.toLowerCase());
+if(!role) {
+for(let c=0; c<activePlateDim.cols; c++) { if(nc[r][c].role === oldRole) { nc[r][c].role = null; nc[r][c].conc = null; } }
+} else {
+let step = 0;
+for (let c=0; c<activePlateDim.cols; c++) {
+if (!nc[r][c].role || nc[r][c].role === oldRole) {
+nc[r][c].role = role;
+if(isCtrl) nc[r][c].conc = 0;
+else { const s = customConc[role] || { top: tConc, dil: dFact }; nc[r][c].conc = s.top / Math.pow(s.dil, step); }
+step++;
+}
+}
+}
+const nrc=[...rowCompounds]; nrc[r]=role;
+updatePlate({ cellConfig: nc, rowCompounds: nrc });
+const t=v.trim(); if(t&&!allCmpds.includes(t)) setCustomCmpds(p=>[...p,t]);
+};
+const updateCellCfg = (r,c,upd) => { const nc=cellConfig.map(row=>row.map(cell=>({...cell}))); nc[r][c]={...nc[r][c],...upd}; updatePlate({ cellConfig: nc }); };
+const addCustomCmp = () => { const el=document.getElementById('new-cmp'); const v=el.value.trim(); if(v&&!allCmpds.includes(v)){ setCustomCmpds(p=>[...p,v]); el.value=''; } };
+const addCustomCellLine = () => { const el=document.getElementById('new-cellline'); const v=el.value.trim(); if(v&&!allCellLines.includes(v)){ setCustomCellLines(p=>[...p,v]); el.value=''; } };
+
+const cleanOutliers = (targetReg = null, targetCmp = null) => {
+const nc = cellConfig.map(row => row.map(c => ({...c})));
+let changed = false;
+const processCmp = (reg, cmp) => {
+for (let it = 0; it < 20; it++) {
+const pts = [];
+const byC = {};
+grid.forEach((_, r) => grid[r].forEach((_, c) => {
+if (r >= activePlateDim.rows || c >= activePlateDim.cols) return;
+const cfg = nc[r][c]; const role = getRole(r,c);
+if ((cfg.region || 'Primary') === reg && role === cmp.name && !cfg.manualOverride && !cfg.excluded) {
+const n = rawOD(r,c); const xc = concOf(r,c,role);
+if (!isNaN(n) && xc > 0) {
+const val = viability(n);
+const k = concKey(xc);
+if(!byC[k]) byC[k] = [];
+byC[k].push({ r, c, x: xc, y: val, realX: xc, val });
+}
+}
+}));
+Object.values(byC).forEach(cps => {
+const mean = cps.reduce((s, p) => s + p.y, 0) / cps.length;
+let sd = 0;
+if (useFixedSD) {
+sd = fSD;
+} else if (cps.length > 1) {
+sd = Math.sqrt(cps.reduce((s, p) => s + Math.pow(p.y - mean, 2), 0) / (cps.length - 1));
+}
+cps.forEach(p => {
+p.computedSD = sd;
+p.effectiveSD = effectiveSD(cmp.name, p.realX, sd);
+pts.push(p);
+});
+});
+if (pts.length < 4) break;
+const ft = fit4PL(pts);
+if (!ft) break;
+let worst = null, maxRatio = 0;
+pts.forEach(p => {
+const pred = 100 / (1 + Math.pow(p.realX / ft.ic50, ft.hill));
+const residual = Math.abs(p.y - pred);
+const err = p.effectiveSD > 0 ? p.effectiveSD : (fSD > 0 ? fSD : 1);
+const ratio = residual / err;
+if (ratio > outlierThresh) {
+if (ratio > maxRatio) {
+maxRatio = ratio;
+worst = p;
+}
+}
+});
+if (worst) {
+nc[worst.r][worst.c].excluded = true;
+changed = true;
+} else {
+break;
+}
+}
+};
+if (targetReg && targetCmp) {
+processCmp(targetReg, { name: targetCmp });
+} else {
+Object.entries(processedByRegion).forEach(([reg, comps]) => {
+comps.forEach(cmp => processCmp(reg, cmp));
+});
+}
+if (changed) updatePlate({ cellConfig: nc });
+};
+
+const restoreAll = () => { const nc = cellConfig.map(row=>row.map(c=>({...c,excluded:false,manualOverride:false}))); updatePlate({ cellConfig: nc }); };
+const resetAll = () => { setDialog({ type: 'confirm', title: 'Reset All', message: 'Clear all data and settings?', onConfirm: () => window.location.reload() }); };
+const PanelHeader = ({ title, subtitle, panelId, extra }) => {
+const isFs = fsPanel === panelId;
+return (
+<div className="flex justify-between items-start mb-2 gap-2">
+<div className="min-w-0">
+<h2 className="text-sm lg:text-base font-bold text-gray-800 truncate">{title}</h2>
+{subtitle && <p className="text-[10px] text-gray-500 mt-0.5">{subtitle}</p>}
+</div>
+<div className="flex items-center shrink-0">
+{extra}
+<button onClick={() => toggleFs(panelId)} className="text-gray-400 hover:text-blue-600 bg-gray-100 hover:bg-blue-100 rounded p-1 transition-colors" title={isFs ? 'Exit fullscreen' : 'Expand fullscreen'}>{isFs ? '↙️' : '↗️'}</button>
+</div>
+</div>
+);
+};
+return (
+<div className="w-full relative pb-10 flex flex-col h-screen overflow-hidden">
+<div className="flex flex-wrap items-center justify-between gap-2 p-2 bg-white border-b border-gray-300 shadow-sm z-50 shrink-0">
+<div className="flex items-center gap-1">
+{appView === 'editor' && (
+<>
+<button onClick={handleBackToExplorer} className="bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold px-3 py-1.5 rounded text-xs transition-colors flex items-center gap-1 shadow-sm border border-gray-300 mr-2" title="Back to Experiment Explorer">◀ Back</button>
+<button onClick={handleUndo} disabled={historyIndex === 0} className={`px-2 py-1.5 text-xs font-bold rounded flex items-center gap-1 transition-colors border shadow-sm ${historyIndex > 0 ? 'bg-white hover:bg-gray-100 text-gray-700 border-gray-300' : 'bg-gray-50 text-gray-300 border-gray-200 cursor-not-allowed'}`} title="Undo last action">↩️</button>
+<button onClick={handleRedo} disabled={historyIndex >= historyRef.current.length - 1} className={`px-2 py-1.5 text-xs font-bold rounded flex items-center gap-1 transition-colors border shadow-sm ${historyIndex < historyRef.current.length - 1 ? 'bg-white hover:bg-gray-100 text-gray-700 border-gray-300' : 'bg-gray-50 text-gray-300 border-gray-200 cursor-not-allowed'}`} title="Redo action">↪️</button>
+<div className="w-px h-5 bg-gray-300 mx-1"></div>
+<button onClick={exportXLS} className="bg-green-50 hover:bg-green-100 text-green-800 border border-green-300 font-bold py-1.5 px-3 rounded text-xs flex items-center gap-1 shadow-sm" title="Export raw and processed data to Excel">📊 Export XLS</button>
+<button onClick={exportPDF} className="bg-red-50 hover:bg-red-100 text-red-800 border border-red-300 font-bold py-1.5 px-3 rounded text-xs flex items-center gap-1 shadow-sm" title="Export visual report to PDF">📄 Export PDF</button>
+<div className="w-px h-5 bg-gray-300 mx-1"></div>
+<label className="bg-violet-50 hover:bg-violet-100 text-violet-800 border border-violet-300 font-bold py-1.5 px-3 rounded text-xs text-center cursor-pointer flex items-center gap-1 shadow-sm" title="Load a previously saved HTML session">
+📂 Load HTML<input type="file" accept=".html" onChange={loadHTML} className="hidden"/>
+</label>
+<button onClick={exportHTML} className="bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-300 font-bold py-1.5 px-3 rounded text-xs flex items-center gap-1 shadow-sm" title="Save current session locally as an HTML file">💾 Save HTML</button>
+<button onClick={handleSaveAsNew} className="bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-300 font-bold py-1.5 px-3 rounded text-xs flex items-center gap-1 shadow-sm" title="Clone to a new Cloud Experiment">☁️ Cloud Save</button>
+</>
+)}
+</div>
+<div className="flex items-center gap-2">
+{appView === 'editor' && (
+<div className="text-[11px] font-bold text-gray-500 flex items-center gap-1 bg-gray-100 px-2 py-1 rounded-md border border-gray-200">
+{saveStatus === 'saving' ? <span className="text-blue-500 animate-pulse flex items-center gap-1">💾 Saving...</span> :
+saveStatus === 'saved' ? <span className="text-green-600 flex items-center gap-1">☁️ Saved</span> :
+saveStatus === 'error' ? <span className="text-red-600 flex items-center gap-1" title={saveErrorMsg}>❌ Error Saving</span> :
+(!db ? <span className="text-green-600 flex items-center gap-1">💾 Saved Locally</span> : null)}
+</div>
+)}
+</div>
+</div>
+{dialog && (
+<div className="fixed inset-0 bg-gray-900/50 z-[999999] flex items-center justify-center p-4 backdrop-blur-sm">
+<div className="bg-white rounded-lg shadow-xl w-full max-w-sm overflow-hidden flex flex-col border border-gray-200" onClick={e=>e.stopPropagation()}>
+<div className="p-4 flex flex-col">
+{dialog.title && <h3 className="text-lg font-bold text-gray-800 mb-2">{dialog.title}</h3>}
+<p className="text-sm text-gray-600 mb-4">{dialog.message}</p>
+{dialog.type === 'prompt' && (
+<input type="text" id="prompt-input" defaultValue={dialog.defaultValue} autoFocus
+onKeyDown={e => {
+if(e.key === 'Enter'){ dialog.onConfirm(e.target.value); setDialog(null); }
+if(e.key === 'Escape'){ setDialog(null); }
+}}
+className="border border-gray-300 rounded p-2 text-sm focus:border-blue-500 focus:outline-none mb-2"/>
+)}
+<div className="flex justify-end gap-2 mt-2">
+{(dialog.type === 'confirm' || dialog.type === 'prompt') && (
+<button onClick={()=>setDialog(null)} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded">Cancel</button>
+)}
+<button onClick={()=>{
+if (dialog.onConfirm) {
+if(dialog.type === 'prompt') dialog.onConfirm(document.getElementById('prompt-input').value);
+else dialog.onConfirm();
+}
+setDialog(null);
+}} className="px-4 py-2 text-sm font-bold bg-blue-600 hover:bg-blue-700 text-white rounded shadow-sm">
+{dialog.type === 'alert' ? 'OK' : 'Confirm'}
+</button>
+</div>
+</div>
+</div>
+</div>
+)}
+{mergeModal && (
+<div className="fixed inset-0 bg-gray-900/50 z-[99999] flex items-center justify-center backdrop-blur-sm" onClick={() => setMergeModal(false)}>
+<div className="bg-white p-6 rounded-lg shadow-xl border border-gray-200 w-[400px]" onClick={e => e.stopPropagation()}>
+<h3 className="text-lg font-bold text-gray-800 mb-2">📥 Import Plates</h3>
+<p className="text-sm text-gray-600 mb-4">Select another experiment to pull its plates into this workspace.</p>
+<div className="flex flex-col gap-3">
+<select value={mergeSource} onChange={e=>setMergeSource(e.target.value)} className="border border-gray-300 rounded p-2 text-sm w-full">
+<option value="">-- Select Source Experiment --</option>
+{experimentsList.filter(e => e.id !== currentDocId).map(exp => {
+const parsed = parsePayload(exp);
+const pCount = parsed && parsed.plates ? parsed.plates.length : 0;
+return <option key={exp.id} value={exp.id}>{exp.title || 'Untitled'} ({pCount} plates)</option>;
+})}
+</select>
+<div className="flex justify-end gap-2 mt-4">
+<button onClick={() => setMergeModal(false)} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded">Cancel</button>
+<button onClick={() => {
+if(!mergeSource) return;
+const srcExp = experimentsList.find(e => e.id === mergeSource);
+if(srcExp) {
+try {
+const parsed = parsePayload(srcExp);
+if (parsed && parsed.plates) {
+const newPlates = parsed.plates.map(p => ({
+...p,
+id: 'p_' + Date.now() + Math.random().toString(36).substr(2, 5),
+name: p.name + ' (Imported)'
+}));
+setPlates(prev => [...prev, ...newPlates]);
+}
+} catch(e) { console.error(e); }
+}
+setMergeModal(false);
+}} className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white font-bold rounded shadow-sm">Import Plates</button>
+</div>
+</div>
+</div>
+</div>
+)}
+{vialModal && (
+<div className="fixed inset-0 bg-gray-900/50 z-[999999] flex items-center justify-center backdrop-blur-sm" onClick={() => setVialModal(null)}>
+<div className="bg-white p-6 rounded-lg shadow-xl w-[400px] border border-gray-200" onClick={e => e.stopPropagation()}>
+<h3 className="font-bold text-lg text-gray-800 mb-4 border-b border-gray-200 pb-2">📦 Vial Contents: {ROWS[vialModal.r]}{COLS[vialModal.c]}</h3>
+<textarea
+className="w-full h-32 border border-gray-300 rounded p-3 text-sm focus:outline-none focus:border-blue-500 custom-scrollbar shadow-inner"
+placeholder="Describe the content of this vial or eppendorf..."
+value={vialModal.text}
+onChange={e => setVialModal({...vialModal, text: e.target.value})}
+autoFocus
+/>
+<div className="flex justify-between mt-4">
+<button onClick={() => {
+const ng = grid.map(row => [...row]);
+ng[vialModal.r][vialModal.c] = '';
+updatePlate({ grid: ng });
+setVialModal(null);
+}} className="px-4 py-2 text-sm font-bold text-red-600 hover:bg-red-50 rounded">Clear Well</button>
+<div className="flex gap-2">
+<button onClick={() => setVialModal(null)} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded">Cancel</button>
+<button onClick={() => {
+const ng = grid.map(row => [...row]);
+ng[vialModal.r][vialModal.c] = vialModal.text;
+updatePlate({ grid: ng });
+setVialModal(null);
+}} className="px-4 py-2 text-sm bg-blue-600 text-white font-bold rounded hover:bg-blue-700 shadow-sm">Save Content</button>
+</div>
+</div>
+</div>
+</div>
+)}
+{showAgenda && (
+<div className="fixed inset-0 bg-gray-900/50 z-[99999] flex items-center justify-center p-4 backdrop-blur-sm" onClick={()=>setShowAgenda(false)}>
+<div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col border border-gray-200" onClick={e=>e.stopPropagation()}>
+<div className="p-4 border-b flex justify-between items-center bg-gray-50 rounded-t-xl">
+<h2 className="text-xl font-black text-gray-800 flex items-center gap-2">🗓️ Full Agenda</h2>
+<button onClick={()=>setShowAgenda(false)} className="text-gray-400 hover:text-red-500 font-bold text-xl px-2">&times;</button>
+</div>
+<div className="p-5 overflow-y-auto custom-scrollbar flex-1 flex flex-col gap-5">
+{Object.keys(agendaGrouped).length === 0 ? (
+<div className="text-center text-gray-400 py-10 italic">No tasks planned across any plates.</div>
+) : (
+Object.entries(agendaGrouped).map(([date, tasks]) => (
+<div key={date} className="border border-blue-100 rounded-lg p-4 bg-white shadow-sm flex flex-col">
+<h3 className="font-bold text-lg text-blue-800 border-b border-blue-100 pb-2 mb-3">{date}</h3>
+<ul className="flex flex-col gap-2">
+{tasks.map((t, idx) => (
+<li key={idx} className="flex items-center gap-3 bg-gray-50 p-2.5 border border-gray-200 rounded-md">
+<button onClick={()=>{ setActivePlateId(t.plateId); setShowAgenda(false); }} className="text-xs font-bold bg-blue-100 hover:bg-blue-200 text-blue-800 px-2 py-1 rounded cursor-pointer transition-colors whitespace-nowrap shadow-sm">{t.plateName}</button>
+<span className="text-sm text-gray-700 flex-1">{t.task}</span>
+</li>
+))}
+</ul>
+</div>
+))
+)}
+</div>
+</div>
+</div>
+)}
+{pendingLoad && (
+<div className="fixed inset-0 bg-gray-900/50 z-[99999] flex items-center justify-center backdrop-blur-sm">
+<div className="bg-white p-6 rounded-lg shadow-xl border border-gray-200 w-96">
+<h3 className="text-lg font-bold text-gray-800 mb-2">Load Workspace Data</h3>
+<p className="text-sm text-gray-600 mb-6">How would you like to load the data from this file?</p>
+<div className="flex flex-col gap-3">
+<button onClick={() => confirmLoad('append')} className="bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-800 font-bold py-2 px-4 rounded text-left transition-colors">
+➕ Add to Current File
+<span className="block text-xs font-normal opacity-80 mt-1">Appends the new plates without removing your current work.</span>
+</button>
+<button onClick={() => confirmLoad('replace')} className="bg-red-50 hover:bg-red-100 border border-red-200 text-red-800 font-bold py-2 px-4 rounded text-left transition-colors">
+🔄 Substitute Data
+<span className="block text-xs font-normal opacity-80 mt-1">Overwrites everything currently on screen with the new file.</span>
+</button>
+<button onClick={() => setPendingLoad(null)} className="mt-3 text-gray-500 hover:text-gray-700 text-sm font-bold py-2 text-center w-full transition-colors">
+Cancel
+</button>
+</div>
+</div>
+</div>
+)}
+{appView === 'explorer' && (
+<div className="absolute inset-0 z-[100] flex flex-col items-center p-10 bg-gray-100 overflow-y-auto">
+<div className="w-full max-w-5xl bg-white p-8 rounded-xl shadow-2xl border border-gray-200">
+<div className="flex justify-between items-center mb-8 border-b pb-4">
+<h1 className="text-3xl font-black text-gray-800">🧪 Laboratory Workspace</h1>
+<button onClick={createNewExperiment} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg shadow transition-colors">
++ New Experiment
+</button>
+</div>
+{Object.keys(groupedExperiments).length === 0 ? (
+<div className="text-center py-12 text-gray-500 text-lg italic flex flex-col items-center gap-4">
+<span>No experiments saved. Create a new one to start!</span>
+{!db && <span className="text-sm bg-yellow-100 text-yellow-800 px-3 py-1 rounded border border-yellow-200 shadow-sm">Running in Local Storage Mode (Cloud Sync disabled)</span>}
+</div>
+) : (
+<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+{Object.values(groupedExperiments).map(group => {
+const titleParts = [];
+if (group.expTypes) titleParts.push(group.expTypes);
+if (group.cellLines) titleParts.push(group.cellLines);
+if (group.compounds) titleParts.push(group.compounds);
+const groupTitle = group.isUnclassified ? (group.items[0].title || 'Untitled') : titleParts.join(' - ');
+const isExpanded = expandedGroups[group.key];
+return (
+<div key={group.key} className="border border-gray-200 rounded-xl p-5 hover:shadow-xl hover:border-blue-300 transition-all bg-white flex flex-col h-full">
+<h3 className="font-bold text-xl text-blue-900 mb-2 leading-tight">{groupTitle}</h3>
+<p className="text-sm text-gray-500 mb-4 font-medium bg-gray-100 inline-block px-2 py-1 rounded-md self-start">{group.items.length} Experiment{group.items.length === 1 ? '' : 's'}</p>
+<div className="flex flex-col gap-2 flex-1">
+{group.items.slice(0, isExpanded ? undefined : 3).map(exp => (
+<div key={exp.id} onClick={() => openExperiment(exp)} className="bg-white border border-gray-200 hover:border-blue-400 hover:shadow-md p-3 rounded-lg cursor-pointer flex justify-between items-center transition-all group/item">
+<div className="flex flex-col">
+<span className="font-bold text-sm text-blue-700 flex items-center gap-2">
+📅 <span className="underline decoration-blue-300 underline-offset-2">{exp.date || 'No Date'}</span>
+</span>
+<span className="text-[11px] text-gray-500 mt-1">{exp.plateCount || 1} Plates {exp.title && exp.title !== groupTitle ? `• ${exp.title}` : ''}</span>
+</div>
+<div className="flex flex-col gap-1 opacity-0 group-hover/item:opacity-100 transition-all">
+<button onClick={(e) => renameExperiment(e, exp.id, exp.title || groupTitle)} className="text-blue-500 hover:bg-blue-50 px-2 py-1 rounded text-xs font-bold text-left">Rename</button>
+<button onClick={(e) => { e.stopPropagation(); deleteExperiment(e, exp.id); }} className="text-red-500 hover:bg-red-50 px-2 py-1 rounded text-xs font-bold text-left">Delete</button>
+</div>
+</div>
+))}
+{group.items.length > 3 && (
+<button onClick={() => toggleGroup(group.key)} className="text-xs text-blue-600 bg-blue-50 hover:bg-blue-100 font-bold py-2 rounded-lg mt-2 text-center transition-colors w-full">
+{isExpanded ? 'Hide Experiments' : `Show ${group.items.length - 3} more experiments...`}
+</button>
+)}
+</div>
+</div>
+);
+})}
+</div>
+)}
+</div>
+</div>
+)}
+{appView === 'editor' && (
+<>
+<div className="flex flex-col sm:flex-row justify-between bg-white pt-2 px-4 shadow-sm z-40 shrink-0 border-b border-gray-300">
+<div className="flex bg-white items-end overflow-x-auto custom-scrollbar flex-1 gap-1 pb-1">
+{Object.entries(plateGroups).map(([groupName, groupPlates]) => {
+const isActive = groupName === activeGroupName;
+return (
+<div key={groupName} onClick={() => { if(!isActive) setActivePlateId(groupPlates[0].id); }}
+className={`px-3 py-1.5 text-sm font-bold border border-b-0 rounded-t-lg whitespace-nowrap flex items-center gap-1.5 transition-colors cursor-pointer group ${isActive ? 'border-blue-400 bg-blue-50 text-blue-800 shadow-sm relative z-10' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
+{isActive ? (
+<input value={activePlateData.name} onChange={e => {
+const newName = e.target.value;
+setPlates(prev => prev.map(p => p.name === groupName ? { ...p, name: newName } : p));
+}} className="bg-transparent border-none outline-none font-bold min-w-[60px] w-auto max-w-[150px] text-blue-800 placeholder-blue-300 text-center" placeholder="Group Name" onClick={e=>e.stopPropagation()}/>
+) : ( <span>{groupName}</span> )}
+<span className="text-[10px] bg-gray-200 text-gray-600 rounded-full px-1.5 py-0.5 ml-1 leading-none">{groupPlates.length}</span>
+{Object.keys(plateGroups).length > 1 && (
+<span onClick={(e) => {
+e.stopPropagation();
+setDialog({
+type: 'confirm', title: 'Delete Group', message: `Delete all ${groupPlates.length} items(s) in "${groupName}"?`,
+onConfirm: () => {
+setPlates(prev => {
+const next = prev.filter(p => p.name !== groupName);
+if(next.length === 0) return [createEmptyPlate('p1', 1)];
+if(activeGroupName === groupName) setActivePlateId(next[0].id);
+return next;
+});
+}
+});
+}} className="text-gray-300 hover:text-red-600 ml-1 opacity-0 group-hover:opacity-100 transition-opacity" title="Delete Group">&times;</span>
+)}
+</div>
+);
+})}
+<button onClick={() => {
+const id = 'p' + Date.now();
+const num = Object.keys(plateGroups).length + 1;
+setPlates(prev => [...prev, createEmptyPlate(id, num)]);
+setActivePlateId(id);
+}} className="px-3 py-1.5 text-sm text-blue-600 bg-white border border-blue-200 rounded-t-lg font-bold hover:bg-blue-50 ml-2 shadow-sm" title="Create a new group of plates">+ New Group</button>
+<button onClick={() => setMergeModal(true)} className="px-3 py-1.5 text-sm text-blue-600 bg-blue-50 border border-blue-200 rounded-t-lg font-bold hover:bg-blue-100 ml-1" title="Import plates from another experiment">📥 Import</button>
+</div>
+<div className="py-2 sm:py-0 sm:pb-1 flex items-center gap-4">
+<input type="text" placeholder="🔍 Search plates..." value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} className="text-xs border border-gray-300 rounded-full px-3 py-1 outline-none focus:border-blue-500 w-full sm:w-48"/>
+</div>
+</div>
+{plateGroups[activeGroupName] && (
+<div className="flex px-4 py-2 gap-2 bg-blue-50 border-b border-blue-200 items-center overflow-x-auto z-20 shrink-0">
+<span className="text-[10px] font-bold text-blue-800 uppercase tracking-wide mr-2 flex items-center gap-1">⏱️ Instances:</span>
+{plateGroups[activeGroupName].map((p, idx) => (
+<button key={p.id} onClick={() => setActivePlateId(p.id)}
+className={`px-3 py-1 text-xs font-bold rounded-full transition-colors flex items-center gap-1.5 shadow-sm group ${activePlateId === p.id ? 'bg-blue-600 text-white' : 'bg-white text-blue-700 border border-blue-300 hover:bg-blue-100'}`}>
+{activePlateId === p.id && idx > 0 && <span onClick={(e)=>{e.stopPropagation(); movePlate(p.id, 'left');}} className="hover:text-blue-300 px-0.5" title="Move Left">◀</span>}
+📅 {p.date || `Instance ${idx+1}`} {p.time ? `(${p.time}h)` : ''}
+{activePlateId === p.id && idx < plateGroups[activeGroupName].length - 1 && <span onClick={(e)=>{e.stopPropagation(); movePlate(p.id, 'right');}} className="hover:text-blue-300 px-0.5" title="Move Right">▶</span>}
+{plateGroups[activeGroupName].length > 1 && (
+<span onClick={(e) => {
+e.stopPropagation();
+setDialog({
+type: 'confirm', title: 'Delete Date', message: `Delete plate for instance ${p.date||'Unnamed'}?`,
+onConfirm: () => {
+setPlates(prev => {
+const next = prev.filter(plate => plate.id !== p.id);
+if (activePlateId === p.id) {
+const remainingInGroup = next.filter(plate => plate.name === activeGroupName);
+setActivePlateId(remainingInGroup.length > 0 ? remainingInGroup[0].id : next[0].id);
+}
+return next;
+});
+}
+})
+}} className={`ml-1 opacity-0 group-hover:opacity-100 ${activePlateId === p.id ? 'text-blue-300 hover:text-white' : 'text-red-300 hover:text-red-500'}`} title="Delete Plate">&times;</span>
+)}
+</button>
+))}
+<button onClick={() => {
+const id = 'p' + Date.now();
+const newP = createEmptyPlate(id, 1);
+newP.name = activeGroupName;
+const activeP = plates.find(p=>p.id === activePlateId);
+if(activeP) {
+newP.grid = activeP.grid.map(r=>[...r]);
+newP.cellConfig = activeP.cellConfig.map(r=>r.map(c=>({...c})));
+newP.compounds = [...activeP.compounds];
+newP.rowCompounds = [...activeP.rowCompounds];
+newP.plateType = activeP.plateType;
+}
+setPlates(prev => [...prev, newP]);
+setActivePlateId(id);
+}} className="px-3 py-1 text-[10px] font-bold text-blue-600 border border-dashed border-blue-400 rounded-full hover:bg-blue-100 transition-colors bg-white shadow-sm" title="Duplicate active plate layout to a new timepoint">+ Add Copy</button>
+</div>
+)}
+</>
+)}
+<div className="flex-1 overflow-y-auto custom-scrollbar p-4 md:px-8 space-y-6">
+<div className="bg-white rounded-xl shadow-sm border border-blue-200 p-4 mb-5 flex flex-col md:flex-row gap-4">
+<div className="flex-1 flex flex-col">
+<div className="flex justify-between items-center mb-2">
+<h2 className="text-sm font-bold text-blue-800 flex items-center gap-2">📅 Project Timeline (All Plates)</h2>
+<button onClick={()=>setShowAgenda(true)} className="bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 font-bold px-3 py-1 rounded text-xs transition-colors shadow-sm" title="View consolidated agenda for all plates">
+🗓️ Full Agenda View
+</button>
+</div>
+<div className="flex flex-col gap-1 max-h-40 overflow-y-auto custom-scrollbar pr-2 flex-1">
+{mergedPlan.length === 0 && <span className="text-xs text-gray-400 italic">No tasks scheduled.</span>}
+{mergedPlan.map((item, idx) => (
+<div key={idx} className="flex gap-3 items-center bg-gray-50 border border-gray-100 p-1.5 rounded">
+<span className="text-[11px] font-black text-gray-700 w-20">{item.date}</span>
+<span onClick={() => setActivePlateId(item.plateId)} className="cursor-pointer text-[10px] font-bold text-blue-600 bg-blue-100 hover:bg-blue-200 px-2 py-0.5 rounded shadow-sm whitespace-nowrap transition-colors" title="Jump to this plate">{item.plateName}</span>
+<span className="text-[12px] text-gray-800 flex-1 truncate">{item.task}</span>
+</div>
+))}
+</div>
+</div>
+<div className="w-full md:w-64 bg-gray-50 border border-gray-200 rounded-lg p-3 select-none flex flex-col shrink-0">
+<div className="flex justify-between items-center mb-2">
+<button onClick={handlePrevMonth} className="text-gray-500 hover:text-blue-600 font-bold px-2">&lt;</button>
+<h3 className="text-xs font-bold text-gray-700 text-center">{monthName}</h3>
+<button onClick={handleNextMonth} className="text-gray-500 hover:text-blue-600 font-bold px-2">&gt;</button>
+</div>
+<div className="grid grid-cols-7 gap-1 text-center mb-1">
+{['M','T','W','T','F','S','S'].map((d,i)=><div key={i} className="text-[10px] font-bold text-gray-400">{d}</div>)}
+</div>
+<div className="grid grid-cols-7 gap-1">
+{Array.from({length: startDayOffset}).map((_, i) => <div key={`empty-${i}`}></div>)}
+{Array.from({length: totalDays}, (_,i)=>{
+const day = String(i+1).padStart(2,'0');
+const month = String(currentMonth.getMonth()+1).padStart(2,'0');
+const dateStr = `${currentMonth.getFullYear()}-${month}-${day}`;
+const hasTask = mergedPlan.some(p => p.date === dateStr);
+const isSel = calFilterDate === dateStr;
+return (
+<button key={i} onClick={()=>setCalFilterDate(isSel ? null : dateStr)}
+className={`text-[10px] py-1 rounded-sm transition ${isSel ? 'bg-blue-600 text-white font-bold' : hasTask ? 'bg-blue-100 text-blue-800 font-bold border border-blue-200 shadow-sm' : 'text-gray-600 hover:bg-gray-200'}`} title={`Filter tasks by ${dateStr}`}>
+{i+1}
+</button>
+);
+})}
+</div>
+{calFilterDate && <button onClick={()=>setCalFilterDate(null)} className="mt-2 w-full text-[10px] text-red-500 font-bold hover:underline" title="Remove date filter">Clear Filter</button>}
+</div>
+</div>
+{fsPanel && <div className="fixed inset-0 bg-gray-900/40 z-[9998] backdrop-blur-sm" onClick={() => setFsPanel(null)} />}
+{ctxMenu&&(
+<div className="fixed bg-white border border-gray-200 shadow-2xl rounded-md py-2 z-50 text-sm w-56 flex flex-col"
+style={{ top: ctxMenu.y, left: ctxMenu.x, maxHeight: '80vh', transform: ctxMenu.y > window.innerHeight / 2 ? 'translateY(-100%)' : 'none' }}>
+<div className="overflow-y-auto custom-scrollbar flex-1">
+<button className="w-full text-left px-4 py-1 hover:bg-gray-100 font-bold text-red-600"
+onClick={()=>{runCtxAction((nc, ng, r, c)=>{nc[r][c].excluded = !nc[r][c].excluded; nc[r][c].manualOverride=true;});}}>
+Toggle Exclude Point
+</button>
+<div className="border-t my-1"/><div className="px-4 py-1 text-xs text-gray-400 uppercase font-bold">Assign Compound</div>
+<div className="max-h-40 overflow-y-auto custom-scrollbar">
+{allCmpds.map(o=><button key={o} className="w-full text-left px-4 py-1 hover:bg-gray-100" onClick={()=>{runCtxAction((nc, ng, r, c)=>{nc[r][c].role=o;});}}>Set as {o}</button>)}
+</div>
+<div className="border-t my-1"/>
+<button className="w-full text-left px-4 py-1 hover:bg-gray-100 text-gray-500 italic" onClick={()=>{runCtxAction((nc, ng, r, c)=>{nc[r][c].role=null; nc[r][c].conc=null;});}}>Clear Compound</button>
+<div className="border-t my-1"/><div className="px-4 py-1 text-xs text-gray-400 uppercase font-bold">Set Region</div>
+<div className="px-2 pb-1"><input type="text" placeholder="Region Name" className="w-full text-xs border border-gray-300 rounded p-1"
+onKeyDown={e => { if (e.key === 'Enter') { confirmRegion(e.target.value); }}} /></div>
+<button className="w-full text-left px-4 py-1 hover:bg-gray-100 text-gray-500 italic" onClick={()=>confirmRegion('Primary')}>Clear Region</button>
+<div className="border-t my-1"/><div className="px-4 py-1 text-xs text-blue-500 uppercase font-bold">Copy / Paste</div>
+<button className="w-full text-left px-4 py-1 hover:bg-blue-50 text-blue-700 font-medium flex items-center justify-between"
+onClick={() => { setAppClipboard({ sel: activeSel || {minR:ctxMenu.r, maxR:ctxMenu.r, minC:ctxMenu.c, maxC:ctxMenu.c}, sourcePlate: activePlateId, grid, cellConfig }); setCtxMenu(null); }}>
+Copy Selection <span className="text-[10px]">Ctrl+C</span>
+</button>
+{appClipboard && <>
+<button className="w-full text-left px-4 py-1 hover:bg-green-50 text-green-700" onClick={() => handlePasteSpecial('all')}>Paste All</button>
+<button className="w-full text-left px-4 py-1 hover:bg-green-50 text-green-700" onClick={() => handlePasteSpecial('od')}>Paste OD Only</button>
+<button className="w-full text-left px-4 py-1 hover:bg-green-50 text-green-700" onClick={() => handlePasteSpecial('compound')}>Paste Compound Only</button>
+<button className="w-full text-left px-4 py-1 hover:bg-green-50 text-green-700" onClick={() => handlePasteSpecial('conc')}>Paste Concentrations Only</button>
+<button className="w-full text-left px-4 py-1 hover:bg-green-50 text-green-700" onClick={() => handlePasteSpecial('region')}>Paste Region Only</button>
+</>}
+</div>
+</div>
+)}
+{regionModal && (
+<div className="fixed inset-0 bg-gray-900/50 z-[99999] flex items-center justify-center backdrop-blur-sm" onClick={() => setRegionModal(null)}>
+<div className="bg-white p-5 rounded-lg shadow-xl border border-gray-200 w-80" onClick={e => e.stopPropagation()}>
+<h3 className="text-lg font-bold text-gray-800 mb-1">Define Region</h3>
+<p className="text-xs text-gray-500 mb-4">Name this block of wells. Empty to clear (Primary).</p>
+<input type="text" id="region-name-input" autoFocus defaultValue={regionModal.defaultName}
+className="border border-gray-300 rounded p-2 w-full text-sm mb-4 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+onKeyDown={e => {
+if(e.key === 'Enter') confirmRegion(e.target.value);
+if(e.key === 'Escape') setRegionModal(null);
+}}/>
+<div className="flex justify-between items-center mt-2">
+<button onClick={() => confirmRegion('Primary')} className="px-3 py-1.5 text-xs font-bold text-red-600 hover:bg-red-50 rounded">Clear Region</button>
+<div className="flex gap-2">
+<button onClick={() => setRegionModal(null)} className="px-3 py-1.5 text-xs font-bold text-gray-600 hover:bg-gray-100 rounded">Cancel</button>
+<button onClick={() => confirmRegion(document.getElementById('region-name-input').value)} className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white font-bold rounded shadow-sm">Save</button>
+</div>
+</div>
+</div>
+</div>
+)}
+<div id="report-container" className="flex flex-col gap-5 bg-white p-5 rounded-xl border border-gray-200 shadow-sm">
+<div className="pdf-page-meta text-center flex flex-col items-center relative">
+<div className="absolute top-0 right-0 bg-blue-100 text-blue-800 font-bold text-xs px-2 py-1 rounded shadow-sm border border-blue-200">
+{plateName || 'Unnamed Plate Group'}
+</div>
+<input value={reportTitle} onChange={e=>setReportTitle(e.target.value)}
+className="w-full max-w-2xl text-2xl font-black text-center text-gray-800 bg-transparent border-none outline-none hover:bg-gray-50 rounded py-1" placeholder={defaultTitle}/>
+<input value={reportSubtitle} onChange={e=>setReportSubtitle(e.target.value)}
+className="w-full max-w-xl text-sm font-medium text-center text-gray-500 bg-transparent border-none outline-none hover:bg-gray-50 rounded py-1 mt-1" placeholder="Conditions / Subtitle"/>
+<div className="flex flex-wrap justify-center gap-6 mt-3">
+<div className="flex items-center border-b border-gray-300 gap-1 w-32" title="Plate Date">
+<span className="text-[12px] text-gray-400">📅</span>
+<input type="date" value={metaDate} onChange={e=>updatePlate({date: e.target.value})} className="bg-transparent text-xs text-gray-600 font-bold focus:outline-none w-full" />
+</div>
+{plateType !== '9x9box' && (
+<div className="flex items-center border-b border-gray-300 gap-1 w-56">
+<span className="text-[12px] text-gray-400">🧪</span>
+<input list="medium-list" value={metaMedium} onChange={e=>updatePlate({medium: e.target.value})} className="bg-transparent text-xs text-gray-600 focus:outline-none w-full truncate" placeholder="Medium (e.g. DMEM)..." />
+</div>
+)}
+<div className="flex items-center border-b border-gray-300 gap-1 w-24">
+<span className="text-[12px] text-gray-400">⏱️</span>
+<input type="number" step="0.5" min="0" value={metaTime} onChange={e=>updatePlate({time: e.target.value})} className="bg-transparent text-xs text-gray-600 text-right w-full focus:outline-none" placeholder="Time" />
+<span className="text-xs text-gray-600 font-medium">h</span>
+</div>
+{plateType !== '9x9box' && (
+<div className="flex items-center border-b border-gray-300 gap-1 w-32">
+<span className="text-[12px] text-gray-400">🦠</span>
+<input type="text" value={metaCellsSeeded} onChange={e=>updatePlate({cellsSeeded: e.target.value})} className="bg-transparent text-xs text-gray-600 focus:outline-none w-full" placeholder="Cells/well" />
+</div>
+)}
+</div>
+<div className="flex flex-col md:flex-row gap-6 mt-5 w-full bg-gray-50 border border-gray-200 rounded-lg p-4 text-left shadow-sm">
+<div className="flex-1 flex flex-col h-full min-h-[160px]">
+<label className="text-xs font-bold text-gray-600 mb-2">📝 Comments / Notes</label>
+<RichTextEditor
+value={metaComments}
+onChange={val => updatePlate({comments: val})}
+placeholder="Enter your experiment notes, cell line passages, protocol deviations, storage details etc..."
+/>
+<div className="mt-4 pt-3 border-t border-gray-200">
+<h3 className="text-[11px] font-bold text-gray-600 mb-2 flex justify-between items-center">
+<span>📅 Schedule / Planning (This Item)</span>
+<div className="flex gap-2">
+<input type="date" id="plan-date" className="border border-gray-300 px-1 py-0.5 text-[10px] rounded bg-white text-gray-800" />
+<button onClick={() => {
+const d = document.getElementById('plan-date').value;
+if(d) updatePlate({plan: [...experimentPlan, { id: Date.now(), date: d, task: '' }].sort((a,b)=>a.date.localeCompare(b.date))});
+}} className="bg-blue-100 hover:bg-blue-200 px-2 py-0.5 rounded text-[10px] font-bold text-blue-800 transition shadow-sm" title="Add task to plate timeline">Add Date</button>
+</div>
+</h3>
+<div className="flex flex-col gap-1 max-h-32 overflow-y-auto custom-scrollbar pr-2">
+{experimentPlan.length === 0 && <span className="text-[10px] text-gray-400 italic">No tasks planned yet.</span>}
+{experimentPlan.map(item => (
+<div key={item.id} className="flex gap-2 items-center bg-white border border-gray-200 p-1 rounded shadow-sm">
+<span className="text-[10px] font-bold w-20 text-gray-600 pl-1">{item.date}</span>
+<input type="text" value={item.task} onChange={e => {
+updatePlate({plan: experimentPlan.map(p => p.id === item.id ? {...p, task: e.target.value} : p)});
+}} className="bg-transparent border-none focus:outline-none focus:bg-gray-50 p-1 text-[11px] flex-1 text-gray-700" placeholder="Task description..." />
+<button onClick={() => updatePlate({plan: experimentPlan.filter(p => p.id !== item.id)})} className="text-gray-400 hover:text-red-500 text-[10px] font-bold px-2 transition" title="Delete Task">&times;</button>
+</div>
+))}
+</div>
+</div>
+</div>
+<div className="flex-shrink-0 flex flex-col justify-start gap-4" style={{maxWidth:'300px',minWidth:'180px'}}>
+<div className="w-full flex flex-col items-end">
+<label className="text-xs font-bold text-gray-600 mb-2 w-full text-right">🔗 External Image Links</label>
+{displayImages.length > 0 ? (
+<div className="flex flex-wrap justify-end gap-2 max-w-[280px]">
+{displayImages.map((imgSrc, idx) => {
+const directSrc = getDirectImageUrl(imgSrc);
+return (
+<div key={idx} className="relative inline-block group">
+<a href={imgSrc} target="_blank" rel="noopener noreferrer" onClick={(e) => {
+if (e.target.tagName === 'IMG' && !e.target.src.startsWith('data:image/svg+xml')) {
+e.preventDefault();
+setZoomImage(directSrc);
+}
+}}>
+<img src={directSrc} alt={`Reference ${idx+1}`}
+style={{maxHeight:'210px', maxWidth:'300px', width:'auto', height:'auto', display:'block'}}
+className="pdf-ref-image object-contain rounded border border-gray-300 shadow-sm bg-white hover:opacity-90 transition-opacity"
+onError={(e) => { e.target.onerror = null; e.target.src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="70"><rect width="100" height="70" fill="%23f3f4f6"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="10" fill="%239ca3af">Click to Open</text></svg>'; }}
+title="Click to zoom or open link" />
+</a>
+<button onClick={()=>{
+const newImgs = displayImages.filter((_, i) => i !== idx);
+updatePlate({images: newImgs, image: null});
+}} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-[10px] font-bold hover:bg-red-600 shadow opacity-0 group-hover:opacity-100 transition-opacity z-10" title="Remove">&times;</button>
+</div>
+)})}
+<button onClick={addImageLink} className="flex items-center justify-center bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded text-blue-500 font-bold h-[70px] w-[35px] text-xl transition-colors shadow-sm" title="Add Image Link">+</button>
+</div>
+) : (
+<button onClick={addImageLink} className="text-xs font-bold text-blue-600 hover:text-blue-800 bg-blue-50 px-6 py-6 rounded-md border-2 border-dashed border-blue-300 shadow-sm flex flex-col items-center justify-center gap-2 hover:bg-blue-100 transition-colors min-h-[100px] w-full" title="Add image URL">
+<span className="text-xl">+ Add Image Link(s)</span>
+</button>
+)}
+</div>
+<div className="w-full flex flex-col items-end border-t border-gray-200 pt-3">
+<label className="text-xs font-bold text-gray-600 mb-2 w-full text-right">🔗 Document Links</label>
+<div className="flex flex-col gap-1.5 w-full mb-3 max-h-[140px] overflow-y-auto custom-scrollbar">
+{documents.length === 0 && <span className="text-[10px] text-gray-400 italic text-right w-full">No documents attached.</span>}
+{documents.map(doc => (
+<div key={doc.id} className="flex items-center justify-between bg-white border border-gray-200 p-1.5 rounded shadow-sm group">
+<div className="flex items-center gap-1.5 truncate flex-1 cursor-pointer" onClick={() => renameDocument(doc.id, doc.name)} title="Click to rename link">
+<a href={doc.data} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 hover:text-blue-600 transition-colors" title={`Open Link`} onClick={(e) => e.stopPropagation()}>
+<span className="text-sm">🔗</span>
+</a>
+<span className="text-[10px] font-medium text-gray-700 truncate group-hover:text-blue-600 transition-colors">{doc.name}</span>
+</div>
+<button onClick={() => removeDocument(doc.id)} className="text-gray-400 hover:text-red-500 font-bold px-1 opacity-0 group-hover:opacity-100 transition-opacity" title="Remove">&times;</button>
+</div>
+))}
+</div>
+<label className="cursor-pointer text-[10px] font-bold text-blue-600 bg-blue-50 border border-blue-200 hover:bg-blue-100 px-3 py-1.5 rounded shadow-sm transition-colors w-full text-center" onClick={addDocumentLink} title="Add Google Drive URL">
++ Add Google Drive Link(s)
+</label>
+</div>
+</div>
+{zoomImage && (
+<div
+className="fixed inset-0 z-[99999] flex items-center justify-center"
+style={{backgroundColor:'rgba(0,0,0,0.82)'}}
+onClick={()=>setZoomImage(null)}>
+<div className="relative" style={{maxWidth:'90vw',maxHeight:'90vh'}}>
+<img src={zoomImage} alt="Experiment zoomed"
+style={{maxWidth:'90vw',maxHeight:'90vh',objectFit:'contain',borderRadius:'8px',boxShadow:'0 25px 60px rgba(0,0,0,0.5)'}} />
+<button
+onClick={e=>{e.stopPropagation();setZoomImage(null);}}
+style={{position:'absolute',top:'-12px',right:'-12px',background:'white',color:'#333',borderRadius:'50%',width:'28px',height:'28px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',fontWeight:'bold',cursor:'pointer',boxShadow:'0 2px 8px rgba(0,0,0,0.3)',border:'none'}} title="Close">&times;</button>
+</div>
+</div>
+)}
+</div>
+</div>
+<div className="h-px bg-gray-200"/>
+<div className="flex flex-wrap gap-4 items-stretch bg-white p-5 rounded-xl border border-gray-200 shadow-sm mt-5">
+<div className="border border-gray-200 bg-gray-50 rounded-lg p-3 flex flex-col gap-2 flex-1 min-w-[350px]">
+<div className="text-[10px] uppercase font-bold text-gray-500 mb-1">Format, Dose & Units</div>
+<div className="flex flex-wrap gap-3 items-end">
+<div>
+<label className="block text-[10px] font-medium text-gray-600 mb-0.5">Plate / Item Format</label>
+<select value={plateType} onChange={e=>{
+const dim = PLATES_DEF[e.target.value] || PLATES_DEF['96'];
+const nGrid = Array(dim.rows).fill(null).map((_,r)=>Array(dim.cols).fill(null).map((_,c)=>grid[r]?.[c]||''));
+const nCell = Array(dim.rows).fill(null).map((_,r)=>Array(dim.cols).fill(null).map((_,c)=>cellConfig[r]?.[c]||{excluded:false, role:null, conc:null, region:'Primary', manualOverride:false}));
+updatePlate({ plateType: e.target.value, grid: nGrid, cellConfig: nCell });
+}} className="border border-blue-400 text-blue-700 font-bold rounded p-1 w-36 text-xs bg-blue-50 cursor-pointer">
+<option value="96">96-well Plate</option>
+<option value="48">48-well Plate</option>
+<option value="24">24-well Plate</option>
+<option value="12">12-well Plate</option>
+<option value="6">6-well Plate</option>
+<option value="1">1 Petri Dish</option>
+<option value="9x9box">9x9 Cryo/Vial Box</option>
+</select>
+</div>
+{plateType !== '9x9box' && (
+<>
+<div>
+<label className="block text-[10px] font-medium text-gray-600 mb-0.5">Unit</label>
+<select value={unit || 'µM'} onChange={e=>updatePlate({unit: e.target.value})} className="border border-gray-300 rounded p-1 w-20 text-xs bg-white font-bold text-gray-800">
+<option value="µM">µM</option>
+<option value="µg/mL">µg/mL</option>
+<option value="nM">nM</option>
+</select>
+</div>
+<div>
+<label className="block text-[10px] font-medium text-gray-600 mb-0.5">Max Conc</label>
+<input type="number" step="0.1" value={topConcStr} onChange={e=>setTopConcStr(e.target.value)} className="border border-gray-300 rounded p-1 w-16 text-xs"/>
+</div>
+<div>
+<label className="block text-[10px] font-medium text-gray-600 mb-0.5">Dil. Factor</label>
+<input type="number" step="0.1" value={dilFactorStr} onChange={e=>setDilFactorStr(e.target.value)} className="border border-gray-300 rounded p-1 w-16 text-xs"/>
+</div>
+</>
+)}
+</div>
+</div>
+<div className="border border-gray-200 bg-gray-50 rounded-lg p-3 flex flex-col gap-2 flex-[1.5] min-w-[350px]">
+<div className="text-[10px] uppercase font-bold text-gray-500 mb-1">Classification Metadata</div>
+<div className="grid grid-cols-2 gap-3">
+<TagInput tags={expTypes} setTags={(t) => updatePlate({expTypes: t})} options={DEF_EXP_TYPES} placeholder="Item / Exp Type" />
+<TagInput tags={cellLines} setTags={(t) => updatePlate({cellLines: t})} options={allCellLines} placeholder="Cell Lines" />
+{plateType !== '9x9box' && (
+<>
+<TagInput tags={techniques} setTags={(t) => updatePlate({techniques: t})} options={DEF_TECHNIQUES} placeholder="Techniques" />
+<TagInput tags={compoundTypes} setTags={(t) => updatePlate({compoundTypes: t})} options={DEF_CMP_TYPES} placeholder="Compound Types" />
+</>
+)}
+</div>
+</div>
+{plateType !== '9x9box' && (
+<div className="border border-gray-200 bg-gray-50 rounded-lg p-3 flex flex-col gap-2 flex-1 min-w-[350px]">
+<div className="text-[10px] uppercase font-bold text-gray-500 mb-1">Customizations</div>
+<div className="flex flex-wrap gap-3 items-end">
+<div className="flex-1 flex flex-col gap-0.5">
+<label className="text-[10px] font-medium text-gray-600">Add Custom Compound:</label>
+<div className="flex gap-1 items-center">
+<input type="text" id="new-cmp" className="border border-gray-300 rounded p-1 w-full min-w-[80px] text-xs" placeholder="Name" onKeyDown={e=>e.key==='Enter'&&addCustomCmp()}/>
+<button onClick={addCustomCmp} className="bg-blue-100 hover:bg-blue-200 text-blue-800 font-bold px-2 py-1 rounded text-xs" title="Add to list">Add</button>
+</div>
+{customCmpds.length>0&&<button onClick={()=>setCustomCmpds([])} className="text-[9px] text-red-400 hover:underline text-left mt-0.5">Clear custom cmpds ({customCmpds.length})</button>}
+</div>
+<div className="flex-1 flex flex-col gap-0.5 border-l border-gray-300 pl-3">
+<label className="text-[10px] font-medium text-gray-600">Add Custom Cell Line:</label>
+<div className="flex gap-1 items-center">
+<input type="text" id="new-cellline" className="border border-gray-300 rounded p-1 w-full min-w-[80px] text-xs" placeholder="Name" onKeyDown={e=>e.key==='Enter'&&addCustomCellLine()}/>
+<button onClick={addCustomCellLine} className="bg-green-100 hover:bg-green-200 text-green-800 font-bold px-2 py-1 rounded text-xs" title="Add to list">Add</button>
+</div>
+{customCellLines.length>0&&<button onClick={()=>setCustomCellLines([])} className="text-[9px] text-red-400 hover:underline text-left mt-0.5">Clear custom cells ({customCellLines.length})</button>}
+</div>
+</div>
+<div className="border-t border-gray-200 pt-2 mt-1">
+<label className="text-[10px] font-medium text-gray-600 mb-0.5 block">Custom Conc per Compound:</label>
+<div className="flex flex-wrap gap-1 items-center">
+<select id="cc-sel" className="border border-gray-300 rounded p-1 text-xs w-20 bg-white">
+<option value="">Pick…</option>{allCmpds.map(c=><option key={c} value={c}>{c}</option>)}
+</select>
+<input type="number" id="cc-top" className="border border-gray-300 rounded p-1 w-16 text-xs" placeholder="Top µM"/>
+<input type="number" id="cc-dil" className="border border-gray-300 rounded p-1 w-14 text-xs" placeholder="Dil" defaultValue={dFact}/>
+<button onClick={()=>{
+const c=document.getElementById('cc-sel').value;
+const t=parseFloat(document.getElementById('cc-top').value);
+const d=parseFloat(document.getElementById('cc-dil').value)||dFact;
+if(c&&!isNaN(t)&&t>0&&d>0){setCustomConc(p=>({...p,[c]:{top:t,dil:d}}));document.getElementById('cc-top').value='';}
+}} className="bg-indigo-100 hover:bg-indigo-200 text-indigo-800 font-bold px-2 py-1 rounded text-xs" title="Apply custom dilution logic to specific compound">Set</button>
+</div>
+{Object.keys(customConc).length>0&&(
+<div className="flex flex-wrap gap-1 mt-1.5">
+{Object.entries(customConc).map(([c,s])=>(
+<span key={c} className="bg-indigo-50 border border-indigo-200 text-indigo-800 text-[9px] px-1.5 py-0.5 rounded flex items-center gap-1">
+{c}:{s.top}µM÷{s.dil}
+<button onClick={()=>setCustomConc(p=>{const n={...p};delete n[c];return n;})} className="text-red-400 font-bold" title="Remove">&times;</button>
+</span>
+))}
+</div>
+)}
+</div>
+</div>
+)}
+</div>
+
+{plateType === '9x9box' && (
+<div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm mt-5">
+  <div className="flex flex-col mb-6 gap-4">
+    <div className="flex justify-between items-start">
+        <div>
+            <h3 className="text-xl font-black text-gray-800 flex items-center gap-2 mb-2">📦 Custom Inventory Box</h3>
+            
+            {/* Storage Metadata */}
+            <div className="flex gap-2 items-center bg-gray-50 p-2 border border-gray-200 rounded mb-3">
+                <span className="text-sm font-bold text-gray-600">Storage Location:</span>
+                <select value={activePlateData.storageType || ''} onChange={e => updatePlate({storageType: e.target.value})} className="border border-gray-300 rounded px-2 py-1 text-sm bg-white outline-none focus:border-blue-500">
+                    <option value="">-- Select Furniture --</option>
+                    <option value="Refrigerator">Refrigerator</option>
+                    <option value="Freezer (Congelatore)">Freezer (Congelatore)</option>
+                    <option value="Closet">Closet</option>
+                </select>
+                <input type="text" placeholder="Shelf/Rack Label ID..." value={activePlateData.storageLabel || ''} onChange={e => updatePlate({storageLabel: e.target.value})} className="border border-gray-300 rounded px-2 py-1 text-sm w-48 outline-none focus:border-blue-500"/>
+            </div>
+
+            {/* Box Dimensions & Controls */}
+            <div className="flex gap-3 items-center">
+                <div className="flex items-center gap-1 bg-white border border-gray-300 rounded p-1">
+                    <label className="text-xs font-bold text-gray-500 px-1">Rows:</label>
+                    <input type="number" min="1" max="26" value={activePlateData.boxRows || 9} onChange={e => updatePlate({boxRows: parseInt(e.target.value)||9})} className="w-12 text-center text-sm outline-none bg-transparent"/>
+                    <div className="w-px h-4 bg-gray-300"></div>
+                    <label className="text-xs font-bold text-gray-500 px-1">Cols:</label>
+                    <input type="number" min="1" max="26" value={activePlateData.boxCols || 9} onChange={e => updatePlate({boxCols: parseInt(e.target.value)||9})} className="w-12 text-center text-sm outline-none bg-transparent"/>
+                </div>
+                <button onClick={() => setBoxRotation(r => (r + 90) % 360)} className="bg-gray-100 hover:bg-gray-200 border border-gray-300 text-gray-700 font-bold px-3 py-1.5 rounded text-sm transition-colors shadow-sm" title="Rotate Visual Layout 90°">
+                    🔄 Rotate Box
+                </button>
+                <div className="relative">
+                    <input type="text" placeholder="🔍 Highlight Compound..." value={boxSearch} onChange={e => setBoxSearch(e.target.value)} className="border border-blue-300 bg-blue-50 rounded-full px-3 py-1.5 text-sm w-56 outline-none focus:ring-2 focus:ring-blue-400"/>
+                    {boxSearch && <button onClick={()=>setBoxSearch('')} className="absolute right-3 top-2 text-blue-400 hover:text-blue-600 font-bold text-xs">&times;</button>}
+                </div>
+            </div>
+        </div>
+        
+        {/* AI Upload Button */}
+        <label className={`cursor-pointer ${isReadingAI ? 'bg-purple-200 text-purple-600' : 'bg-purple-50 border border-purple-300 hover:bg-purple-100 text-purple-800'} font-bold py-2 px-4 rounded-lg shadow-sm flex items-center gap-2 transition-colors shrink-0 h-10`}>
+            <span>{isReadingAI ? '🪄 Reading...' : '🪄 Read Labels (AI)'}</span>
+            <input type="file" accept="image/*" className="hidden" onChange={handleAIImageUpload} disabled={isReadingAI} />
+        </label>
+    </div>
+  </div>
+
+  <div className="w-full overflow-hidden pb-4">
+    {/* Grid Render with Rotation Transformation */}
+    <div className="transition-transform duration-300 ease-in-out origin-center inline-block min-w-full" style={{transform: `rotate(${boxRotation}deg)`}}>
+        <div className="grid gap-2 max-w-min mx-auto bg-slate-50 p-6 border border-slate-300 rounded-xl shadow-inner" style={{ gridTemplateColumns: `auto repeat(${activePlateData.boxCols || 9}, minmax(40px, 1fr))` }}>
+            <div /> 
+            {Array.from({length: activePlateData.boxCols || 9}, (_, c) => (
+                <div key={c} className="text-center font-black text-slate-400 select-none flex items-center justify-center" style={{transform: `rotate(-${boxRotation}deg)`}}>{c+1}</div>
+            ))}
+            {Array.from({length: activePlateData.boxRows || 9}, (_, r) => (
+                <React.Fragment key={r}>
+                    <div className="flex items-center justify-center font-black text-slate-400 select-none" style={{transform: `rotate(-${boxRotation}deg)`}}>{BOX_ROW_LABELS[r]}</div>
+                    {Array.from({length: activePlateData.boxCols || 9}, (_, c) => {
+                        const data = getWellData(r, c);
+                        const hasContent = data.compound.trim().length > 0;
+                        const isSelected = selectedWells.some(w => w.r === r && w.c === c);
+                        const isMatch = boxSearch && data.compound.toLowerCase().includes(boxSearch.toLowerCase());
+
+                        return (
+                            <div key={c} onClick={() => toggleWellSelection(r, c)}
+                                className={`aspect-square w-12 h-12 rounded-full border-[3px] cursor-pointer flex flex-col items-center justify-center text-xs overflow-hidden shadow-sm transition-all hover:scale-110 
+                                ${isSelected ? 'ring-4 ring-blue-500 border-blue-600 bg-blue-50' : 
+                                  isMatch ? 'bg-yellow-200 border-yellow-500 shadow-yellow-500/50 shadow-lg' : 
+                                  hasContent ? 'bg-indigo-100 border-indigo-400 text-indigo-900' : 'bg-white border-slate-200 text-gray-400 hover:border-slate-300'}`}
+                                title={data.compound || 'Empty Slot'}>
+                                <div style={{transform: `rotate(-${boxRotation}deg)`}} className="w-full flex items-center justify-center h-full">
+                                    {hasContent ? (
+                                        <span className="font-bold text-[9px] leading-tight px-1 text-center line-clamp-2 truncate w-full" title={data.compound}>{data.compound}</span>
+                                    ) : (
+                                        <span className="opacity-0 hover:opacity-100 text-[10px] font-bold text-slate-300">+</span>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </React.Fragment>
+            ))}
+        </div>
+    </div>
+  </div>
+
+  {/* Line-by-Line Position Editor */}
+  <div className="mt-6 border-t border-gray-200 pt-6">
+    <div className="flex justify-between items-center mb-4">
+        <div>
+            <h4 className="text-lg font-bold text-gray-800">Selected Vials/Eppendorfs</h4>
+            <p className="text-xs text-gray-500">Click cells in the grid to select them, then edit their data below.</p>
+        </div>
+        <div className="flex gap-2">
+            <button onClick={() => setSelectedWells([])} disabled={selectedWells.length === 0} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 font-bold border border-gray-300 rounded disabled:opacity-50">Clear Selection</button>
+            <button onClick={printBoxLabel} disabled={selectedWells.length === 0} className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white font-bold rounded shadow-sm disabled:opacity-50 flex items-center gap-2">🖨️ Print 12x12cm Label</button>
+        </div>
+    </div>
+
+{selectedWells.length === 0 ? (
+        <div className="bg-gray-50 border border-dashed border-gray-300 rounded-lg p-8 text-center text-gray-400 font-bold">
+            No positions selected. Click on the circles above to start tracking.
+        </div>
+    ) : (
+        <div className="flex flex-col gap-2 max-h-[400px] overflow-y-auto custom-scrollbar pr-2">
+            {selectedWells.sort((a,b) => a.r === b.r ? a.c - b.c : a.r - b.r).map(({r, c}) => {
+                const d = getWellData(r, c);
+                return (
+                    <div key={`${r}-${c}`} className="flex gap-2 items-center bg-white p-2 border border-blue-200 rounded shadow-sm hover:border-blue-400 transition-colors flex-wrap">
+                        <div className="bg-blue-100 text-blue-800 font-black rounded w-10 h-8 flex items-center justify-center shrink-0 border border-blue-200">
+                            {BOX_ROW_LABELS[r]}{c+1}
+                        </div>
+                        <input list="box-cmpd-list" value={d.compound} onChange={e => updateWellData(r, c, 'compound', e.target.value)} placeholder="Compound Name" className="border border-gray-300 rounded px-2 py-1.5 text-sm w-40 outline-none focus:border-blue-500"/>
+                        <input type="text" value={d.concentration} onChange={e => updateWellData(r, c, 'concentration', e.target.value)} placeholder="Conc" className="border border-gray-300 rounded px-2 py-1.5 text-sm w-20 outline-none focus:border-blue-500"/>
+                        <input type="text" value={d.volume} onChange={e => updateWellData(r, c, 'volume', e.target.value)} placeholder="Vol" className="border border-gray-300 rounded px-2 py-1.5 text-sm w-20 outline-none focus:border-blue-500"/>
+                        <input type="date" value={d.date} onChange={e => updateWellData(r, c, 'date', e.target.value)} className="border border-gray-300 rounded px-2 py-1.5 text-sm w-32 outline-none focus:border-blue-500 text-gray-600"/>
+                        <input type="number" value={d.weight} onChange={e => updateWellData(r, c, 'weight', e.target.value)} placeholder="Wt(mg)" className="border border-gray-300 rounded px-2 py-1.5 text-sm w-20 outline-none focus:border-blue-500"/>
+                        <input type="text" value={d.description} onChange={e => updateWellData(r, c, 'description', e.target.value)} placeholder="Description / Notes" className="border border-gray-300 rounded px-2 py-1.5 text-sm flex-1 min-w-[120px] outline-none focus:border-blue-500"/>
+                        <button onClick={() => toggleWellSelection(r, c)} className="text-gray-400 hover:text-red-500 px-2 py-1 rounded ml-auto text-lg shrink-0" title="Deselect">&times;</button>
+                    </div>
+                )
+            })}
+        </div>
+    )}
+    <datalist id="box-cmpd-list">
+        {allCmpds.map(c => <option key={c} value={c}/>)}
+    </datalist>
+  </div>
+</div>
+)}
+
+{plateType !== '9x9box' && (
+<>
+<div className="pdf-page-data flex flex-col xl:flex-row gap-5 pdf-row bg-white p-5 rounded-xl border border-gray-200 shadow-sm mt-5">
+<div className={`bg-gray-50 rounded-xl border border-gray-200 p-3 xl:w-1/2 pdf-half min-w-0 flex flex-col avoid-break ${fsPanel === 'data' ? 'panel-fullscreen' : ''}`}>
+<PanelHeader
+title={`Data Grid (${activePlateDim.rows}x${activePlateDim.cols})`}
+panelId="data"
+extra={
+<div className="flex bg-gray-200 p-0.5 rounded shadow-inner mr-4">
+<button onClick={()=>setTableView('od')} className={`px-2 py-1 text-[10px] font-bold rounded ${tableView==='od'?'bg-white text-blue-700 shadow-sm':'text-gray-500'}`} title="View Raw Data">Raw OD</button>
+<button onClick={()=>setTableView('conc')} className={`px-2 py-1 text-[10px] font-bold rounded ${tableView==='conc'?'bg-white text-blue-700 shadow-sm':'text-gray-500'}`} title="View Concentrations">Concentrations</button>
+<button onClick={()=>setTableView('region')} className={`px-2 py-1 text-[10px] font-bold rounded ${tableView==='region'?'bg-white text-blue-700 shadow-sm':'text-gray-500'}`} title="View Plate Regions">Regions</button>
+</div>
+}
+/>
+<div className="text-[10px] text-gray-500 mb-2 italic px-1 leading-tight flex justify-between">
+<span>
+{tableView === 'od' && "Input raw ODs. Right-click to exclude points or override assignments."}
+{tableView === 'conc' && "Manually override concentrations. Changes here ignore global factors."}
+{tableView === 'region' && "Assign regions. Sub-plots are generated automatically for each region."}
+</span>
+{activeSel && <span className="text-red-500 font-bold bg-red-50 px-1 rounded border border-red-100">Del/Backspace to Clear</span>}
+</div>
+<div className={`border border-gray-300 rounded bg-white select-none relative ${fsPanel==='data'?'flex-1 overflow-auto':''}`}>
+<table className="w-full border-collapse table-fixed min-w-[700px] relative z-10">
+<thead><tr>
+<th className="bg-gray-200 border border-gray-300 p-0.5 text-[11px] sm:text-[13px] text-gray-500 w-6">R\C</th>
+<th className="bg-gray-100 border border-gray-300 p-0.5 text-[9px] sm:text-[11px] text-gray-500 w-24">Row Cmpd →</th>
+{COLS.map((col,c)=>(
+<th key={col} className="bg-gray-50 border border-gray-300 p-0.5">
+<div className="text-[10px] sm:text-[12px] text-gray-400 font-bold">{col}</div>
+<select value={compounds[c]} onChange={e=>updateCmp(c,e.target.value)}
+className="w-full text-center border border-gray-300 rounded p-0 font-semibold text-gray-800 text-[10px] h-5 bg-white cursor-pointer focus:outline-none focus:border-blue-500">
+<option value="">Col Cmpd ↓</option>
+{allCmpds.map(o=><option key={o} value={o}>{o}</option>)}
+</select>
+</th>
+))}
+</tr></thead>
+<tbody>{ROWS.map((rl,r)=>(
+<tr key={rl}>
+<td className="bg-gray-100 border border-gray-300 font-bold text-center text-[11px] sm:text-[13px] text-gray-600">{rl}</td>
+<td className="bg-gray-50 border border-gray-300 p-0.5 align-middle">
+<select value={rowCompounds[r]} onChange={e=>updateRowCmp(r,e.target.value)}
+className="w-full text-center border border-gray-300 rounded p-0 font-semibold text-gray-800 text-[10px] h-6 bg-white cursor-pointer focus:outline-none focus:border-blue-500">
+<option value="">Row Cmpd →</option>
+{allCmpds.map(o=><option key={o} value={o}>{o}</option>)}
+</select>
+</td>
+{COLS.map((col,c)=>{
+const cfg=cellConfig[r][c];
+let val = '';
+if(tableView === 'od') val = grid[r][c]===''?'':(focusedCell&&focusedCell.r===r&&focusedCell.c===c?grid[r][c]:displayVal(r,c));
+else if(tableView === 'conc') val = cfg.conc !== null && cfg.conc !== undefined ? cfg.conc : '';
+else if(tableView === 'region') val = cfg.region || 'Primary';
+const isSelBox = currentSelectionBox && r >= currentSelectionBox.minR && r <= currentSelectionBox.maxR && c >= currentSelectionBox.minC && c <= currentSelectionBox.maxC;
+const isFillBox = activeFill && r >= activeFill.minR && r <= activeFill.maxR && c >= activeFill.minC && c <= activeFill.maxC && !isSelBox;
+let cellStyle = {};
+if (tableView === 'region') {
+const rColor = getRegionColor(cfg.region);
+if (isSelBox) cellStyle.backgroundColor = '#bfdbfe';
+else if (isFillBox) cellStyle.backgroundColor = '#bbf7d0';
+else if (rColor !== 'transparent') cellStyle.backgroundColor = rColor + '33';
+} else {
+if (isSelBox) cellStyle.backgroundColor = '#eff6ff';
+if (isFillBox) cellStyle.backgroundColor = '#f0fdf4';
+}
+const shadows = [];
+if (isSelBox) {
+if (r === currentSelectionBox.minR) shadows.push(`inset 0 2px 0 0 #2563eb`);
+if (r === currentSelectionBox.maxR) shadows.push(`inset 0 -2px 0 0 #2563eb`);
+if (c === currentSelectionBox.minC) shadows.push(`inset 2px 0 0 0 #2563eb`);
+if (c === currentSelectionBox.maxC) shadows.push(`inset -2px 0 0 0 #2563eb`);
+}
+if (isFillBox) {
+if (r === activeFill.minR && r < currentSelectionBox.minR) shadows.push(`inset 0 2px 0 0 #16a34a`);
+if (r === activeFill.maxR && r > currentSelectionBox.maxR) shadows.push(`inset 0 -2px 0 0 #16a34a`);
+if (c === activeFill.minC && c < currentSelectionBox.minC) shadows.push(`inset 2px 0 0 0 #16a34a`);
+if (c === activeFill.maxC && c > currentSelectionBox.maxC) shadows.push(`inset -2px 0 0 0 #16a34a`);
+}
+if (shadows.length > 0) cellStyle.boxShadow = shadows.join(', ');
+return (
+<td key={col} className={`border p-0 ${fsPanel==='data'?'h-10':'h-6'} relative align-middle ${cfg.excluded?'border-gray-300':'border-gray-200'} ${tableView==='region'?'cursor-crosshair':''}`}
+onContextMenu={e=>handleContextMenu(e,r,c)}
+onMouseDown={e=>onMouseDownCell(e,r,c)}
+onMouseEnter={()=>onMouseEnterCell(r,c)}
+onDoubleClick={()=>onDoubleClickCell(r,c)}
+onDragOver={e => e.preventDefault()}
+onDrop={e => handleDrop(e, r, c)}
+style={cellStyle}>
+{!cfg.excluded && tableView==='od' && !isSelBox && !isFillBox && <div className="absolute inset-0 pointer-events-none z-0" style={{backgroundColor:heatColor(r,c)}}/>}
+{isSelBox && r === currentSelectionBox.maxR && c === currentSelectionBox.maxC && (
+<div className="fill-handle absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-blue-600 border border-white cursor-crosshair z-40"
+onMouseDown={onMouseDownFillHandle} title="Drag to fill"/>
+)}
+{isSelBox && r === currentSelectionBox.minR && c === currentSelectionBox.minC && (
+<div draggable={true}
+onDragStart={e => {
+e.dataTransfer.setData('text/plain', JSON.stringify({ action: 'copy', sel: currentSelectionBox, grid, cellConfig, sourcePlate: activePlateId }));
+}}
+className="drag-handle absolute -top-2 -left-2 w-4 h-4 bg-blue-600 text-white rounded shadow cursor-grab z-40 flex items-center justify-center text-[10px]"
+title="Drag to move. Ctrl+Drag to copy.">
+✥
+</div>
+)}
+{tableView === 'region' ? (
+<div className={`w-full h-full flex items-center justify-center select-none text-[10px] font-bold ${cfg.region && cfg.region !== 'Primary' ? 'text-gray-800' : 'text-gray-400'}`}>
+{cfg.region || 'Primary'}
+</div>
+) : (
+<input type="text"
+value={val}
+onFocus={()=>{ if(!cfg.excluded && tableView==='od') setFocusedCell({r,c}); }}
+onBlur={()=>setFocusedCell(null)}
+onChange={ev=>{
+if(cfg.excluded) return;
+if(tableView === 'od') updateCell(r,c,ev.target.value);
+else if(tableView === 'conc') updateCellCfg(r,c,{conc: ev.target.value});
+}}
+onPaste={ev=>{ if(!cfg.excluded && tableView==='od') handlePaste(ev,r,c); }}
+readOnly={cfg.excluded}
+className={`grid-input relative z-10 ${cfg.excluded?'line-through text-gray-400':'text-gray-900'} ${fsPanel==='data'?'text-sm':'text-[0.75rem]'}`}/>
+)}
+{cfg.role && !cfg.excluded && tableView === 'od' && (
+<div className="absolute top-0 right-0 text-[6px] sm:text-[8px] font-bold bg-blue-600 text-white px-1 py-0.5 rounded-bl pointer-events-none z-20 shadow-sm">{cfg.role}</div>
+)}
+{cfg.role && tableView === 'conc' && (
+<div className="absolute top-0 right-0 text-[7px] font-bold bg-gray-200 text-gray-600 px-1 rounded-bl pointer-events-none z-20">{cfg.role}</div>
+)}
+</td>
+);
+})}
+</tr>
+))}</tbody>
+</table>
+</div>
+{tableView === 'region' && (
+<div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded flex gap-2 flex-wrap items-center">
+<span className="text-xs font-bold text-blue-800 mr-2">Manage Regions:</span>
+{[...new Set(cellConfig.flat().map(c => c.region || 'Primary'))].map(r => (
+<div key={r} className="flex items-center gap-1 bg-white border border-gray-300 px-2 py-1 rounded text-xs shadow-sm">
+<span className="font-bold text-gray-700">{r}</span>
+{r !== 'Primary' && (
+<button onClick={()=>renameRegion(r)} className="text-blue-500 hover:text-blue-700 ml-1" title="Rename Region">✏️</button>
+)}
+</div>
+))}
+</div>
+)}
+</div>
+<div className={`bg-gray-50 rounded-xl border border-gray-200 p-3 xl:w-1/2 pdf-half min-w-0 flex flex-col avoid-break ${fsPanel === 'map' ? 'panel-fullscreen' : ''}`}>
+<PanelHeader
+title="Visual Plate Map"
+panelId="map"
+subtitle="Shows compound & exact concentration assigned."
+extra={
+<div className="flex items-center gap-1 bg-white border border-gray-200 rounded px-1.5 py-0.5">
+<span className="text-[10px] text-gray-500 font-bold">A</span>
+<input type="range" min="4" max="24" value={mapFontSize} onChange={e=>setMapFontSize(Number(e.target.value))} className="w-16 accent-blue-500"/>
+<span className="text-[12px] text-gray-500 font-bold">A</span>
+</div>
+}
+/>
+<div className={`bg-white p-2 rounded-xl border border-gray-200 flex flex-col justify-center gap-1 ${fsPanel==='map'?'flex-1':''}`}>
+<div className="flex w-full">
+<div className="w-4 lg:w-6"/>
+{COLS.map(c=><div key={c} className="flex-1 text-center text-[9px] lg:text-xs font-bold text-gray-500">{c}</div>)}
+</div>
+{ROWS.map((rl,r)=>(
+<div key={rl} className="flex items-center w-full">
+<div className="w-4 lg:w-6 text-[9px] lg:text-xs font-bold text-gray-500 text-center">{rl}</div>
+{COLS.map((col,c)=>{
+const cfg = cellConfig[r][c];
+const role = getRole(r,c);
+const {bg,dark} = wellColor(r,c);
+const conc = concOf(r,c,role);
+const tc = dark?'text-gray-900':'text-white';
+const fSize1 = fsPanel === 'map' ? mapFontSize * 1.5 : mapFontSize;
+const fSize2 = fsPanel === 'map' ? (mapFontSize - 1) * 1.5 : (mapFontSize - 1);
+const reg = cfg.region || 'Primary';
+const regColor = getRegionColor(reg);
+const hasCustomReg = reg !== 'Primary';
+let bTop = r === 0 || (cellConfig[r-1] && (cellConfig[r-1][c].region || 'Primary') !== reg);
+let bBottom = r === activePlateDim.rows - 1 || (cellConfig[r+1] && (cellConfig[r+1][c].region || 'Primary') !== reg);
+let bLeft = c === 0 || (cellConfig[r] && (cellConfig[r][c-1].region || 'Primary') !== reg);
+let bRight = c === activePlateDim.cols - 1 || (cellConfig[r] && (cellConfig[r][c+1].region || 'Primary') !== reg);
+const shadows = [];
+if (hasCustomReg) {
+if (bTop) shadows.push(`inset 0 3px 0 0 ${regColor}`);
+if (bBottom) shadows.push(`inset 0 -3px 0 0 ${regColor}`);
+if (bLeft) shadows.push(`inset 3px 0 0 0 ${regColor}`);
+if (bRight) shadows.push(`inset -3px 0 0 0 ${regColor}`);
+}
+const boxSh = shadows.length > 0 ? shadows.join(', ') : 'none';
+return (
+<div key={col} className="flex-1 flex justify-center items-center relative py-1" style={{
+backgroundColor: hasCustomReg ? regColor + '1a' : 'transparent',
+boxShadow: boxSh
+}}>
+<div className={`z-10 ${mapSizeClass} rounded-full border border-black/10 flex flex-col items-center justify-center shadow-sm overflow-hidden`} style={{backgroundColor:bg}}>
+<span style={{fontSize: fSize1+'px'}} className={`font-bold leading-tight truncate max-w-full text-center px-0.5 ${tc}`}>{role||'–'}</span>
+{role&&!['cells','pbs','medium'].includes(role.toLowerCase())&&(
+<span style={{fontSize: fSize2+'px'}} className={`font-bold truncate max-w-full px-0.5 ${tc}`}>{formatConc(conc)}</span>
+)}
+</div>
+{hasCustomReg && bTop && bLeft && (
+<span className="absolute top-[2px] left-[3px] text-[9px] font-black z-20 px-1 rounded shadow-sm whitespace-nowrap" style={{color: '#fff', backgroundColor: regColor}}>{reg}</span>
+)}
+</div>
+);
+})}
+</div>
+))}
+</div>
+</div>
+</div>
+<div className="flex flex-wrap gap-4 items-stretch bg-white p-5 rounded-xl border border-gray-200 shadow-sm mt-5">
+<div className="border border-gray-200 bg-gray-50 rounded-lg p-3 flex flex-col gap-2 flex-1 min-w-[250px]">
+<div className="text-[10px] uppercase font-bold text-gray-500 mb-1">Data Settings (Current Plate)</div>
+<div className="grid grid-cols-2 gap-2 gap-x-4 items-center">
+<label className="text-[11px] font-medium text-gray-600">100% Control:</label>
+<div className="flex items-center gap-1 w-full">
+<select value={ctrlType} onChange={e=>updatePlate({ctrlType: e.target.value})} className="border border-gray-300 rounded p-1 text-xs bg-white w-full">
+<option value="none">Manual</option>{allCmpds.map(c=><option key={c} value={c}>{c}</option>)}
+</select>
+<button onClick={autoCalcControl} className="text-[9px] font-bold bg-indigo-100 hover:bg-indigo-200 text-indigo-800 px-1 py-1 rounded shadow-sm transition whitespace-nowrap" title="Auto-calculate the 100% control OD from the lowest compound concentration">🎯 Auto</button>
+</div>
+<label className="text-[11px] font-medium text-gray-600">Control OD:</label>
+<div className="flex items-center gap-1">
+<input type="number" step="0.01" value={ctrlODStr} onChange={e=>updatePlate({ctrlODStr: e.target.value})}
+className={`border border-gray-300 rounded p-1 w-full text-xs font-bold ${ctrlType!=='none'?'bg-gray-100 text-gray-400':'text-green-700'}`}
+readOnly={ctrlType!=='none'}/>
+{ctrlType!=='none'&&<span className="text-[9px] bg-green-100 text-green-700 px-1 py-0.5 rounded">Auto</span>}
+</div>
+<label className="text-[11px] font-medium text-gray-600">Subtract Blank:</label>
+<select value={bgType} onChange={e=>updatePlate({bgType: e.target.value})} className="border border-gray-300 rounded p-1 text-xs bg-white w-full">
+<option value="none">None</option><option value="manual">Manual</option>
+{allCmpds.map(c=><option key={c} value={c}>{c}</option>)}
+</select>
+{bgType==='manual' ? (
+<>
+<label className="text-[11px] text-gray-600">Blank OD:</label>
+<input type="number" step="0.01" value={bgManualStr} onChange={e=>updatePlate({bgManualStr: e.target.value})} className="border border-gray-300 rounded p-1 w-full text-xs font-bold text-red-700"/>
+</>
+) : bgType!=='none' ? (
+<>
+<label className="text-[11px] text-gray-600">Calc. Blank OD:</label>
+<span className="text-xs font-bold text-red-600 bg-white border border-gray-200 px-2 py-1 rounded w-full">{bgOD.toFixed(4)}</span>
+</>
+) : (<div className="col-span-2"></div>)}
+<label className="text-[11px] font-medium text-gray-600">OD Offset (-):</label>
+<input type="number" step="0.01" value={glbOffsetStr} onChange={e=>setGlbOffsetStr(e.target.value)} className="border border-gray-300 rounded p-1 w-full text-xs text-red-600 font-bold"/>
+<label className="text-[11px] font-medium text-gray-600">Display:</label>
+<select value={showViab?'v':'od'} onChange={e=>setShowViab(e.target.value==='v')} className="border border-gray-300 rounded p-1 text-xs bg-white w-full">
+<option value="v">Viability %</option><option value="od">Raw OD</option>
+</select>
+</div>
+</div>
+<div className="border border-gray-200 bg-gray-50 rounded-lg p-3 flex flex-col gap-2 flex-[2] min-w-[350px]">
+<div className="text-[10px] uppercase font-bold text-gray-500 mb-1">Errors & Fitting</div>
+<div className="flex flex-wrap items-center gap-4 bg-white p-2 rounded border border-gray-200 shadow-sm">
+<div className="flex items-center gap-2">
+<label className="text-[11px] font-medium text-gray-600 flex items-center gap-1 cursor-pointer hover:text-blue-600" title="Apply a fixed standard deviation to all points globally">
+<input type="checkbox" checked={useFixedSD} onChange={e=>setUseFixedSD(e.target.checked)} className="cursor-pointer"/>
+Fixed SD ±:
+</label>
+<input type="number" step="0.1" min="0" value={fixedSDStr} onChange={e=>setFixedSDStr(e.target.value)} disabled={!useFixedSD} className={`border border-gray-300 rounded p-1 w-16 text-xs ${!useFixedSD ? 'bg-gray-100 text-gray-400' : 'bg-white font-bold text-blue-700'}`}/>
+</div>
+<div className="w-px h-8 bg-gray-300 hidden sm:block"></div>
+<div className="flex items-center gap-2">
+<label className="text-[11px] font-medium text-gray-600" title="Multiply current error values by this scale factor">Error Bar ×:</label>
+<input type="number" step="0.1" min="0" value={errScaleStr} onChange={e=>setErrScaleStr(e.target.value)} className="border border-gray-300 rounded p-1 w-16 text-xs"/>
+</div>
+<div className="w-px h-8 bg-gray-300 hidden md:block"></div>
+<div className="flex flex-col gap-1">
+<button onClick={autoTouchAll} className="text-[10px] uppercase tracking-wider bg-orange-200 hover:bg-orange-300 text-orange-900 font-bold py-1 px-3 rounded shadow flex items-center justify-center gap-1 whitespace-nowrap" title="Automatically set errors to minimally touch the fit curve for ALL compounds">
+🎯 Auto-Touch (All)
+</button>
+<button onClick={revertNormalSD} className="text-[9px] uppercase tracking-wider bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-1 px-3 rounded shadow flex items-center justify-center gap-1 whitespace-nowrap" title="Reset all errors to true calculated Standard Deviation (SD)">
+🔄 Revert to Normal SD
+</button>
+<button onClick={forceFixedSD} className="text-[9px] uppercase tracking-wider bg-blue-200 hover:bg-blue-300 text-blue-900 font-bold py-1 px-3 rounded shadow flex items-center justify-center gap-1 whitespace-nowrap" title="Force the use of Fixed SD everywhere and clear manual overrides">
+🔒 Force Fixed SD
+</button>
+</div>
+<div className="w-px h-8 bg-gray-300 hidden md:block"></div>
+<div className="flex flex-col gap-1">
+<label className="text-[10px] font-medium text-gray-600" title="Multiplier for the error to define an outlier">Outlier Threshold (× Error):</label>
+<input type="number" step="0.1" min="0.1" value={outlierThreshStr} onChange={e=>setOutlierThreshStr(e.target.value)} className="border border-gray-300 rounded p-1 w-16 text-xs"/>
+</div>
+<button onClick={cleanOutliers} className="bg-yellow-400 hover:bg-yellow-500 text-gray-900 font-bold py-1.5 px-4 rounded text-xs flex items-center gap-1 shadow-sm h-full" title="Statistically evaluate and remove outlier replicates from all curves">🧹 Clean Outliers</button>
+</div>
+<div className="flex flex-wrap items-center gap-4 mt-1">
+<label className="flex items-center gap-1.5 bg-blue-50 border border-blue-200 rounded px-2 py-1 cursor-pointer">
+<span className="text-[11px] font-bold text-blue-800">Fit IC50 (Weighted)</span>
+<input type="checkbox" checked={fitIC50} onChange={e=>setFitIC50(e.target.checked)} className="w-3.5 h-3.5 cursor-pointer"/>
+</label>
+<label className="flex items-center gap-1.5 bg-gray-100 border border-gray-200 rounded px-2 py-1 cursor-pointer">
+<span className="text-[11px] text-gray-700">Show Excl. Points</span>
+<input type="checkbox" checked={showExcl} onChange={e=>setShowExcl(e.target.checked)} className="w-3.5 h-3.5 cursor-pointer"/>
+</label>
+<button onClick={restoreAll} className="text-[10px] bg-red-100 hover:bg-red-200 text-red-800 font-bold py-1 px-3 rounded ml-auto transition-colors" title="Restore all excluded outliers globally">↩️ Restore Excluded Points</button>
+</div>
+</div>
+</div>
+<div className="flex flex-col avoid-break mt-5">
+<div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-3 p-3 bg-gray-50 border border-gray-200 rounded-lg gap-3">
+{plotCmps.length>0?(
+<div className="flex-1">
+<span className="text-xs font-semibold text-gray-700 block mb-2">Filter & Color Series:</span>
+<div className="flex flex-wrap gap-3">
+{plotCmps.map((cmp)=>{
+const hex=cmpColor(cmp, allCmpds.indexOf(cmp));
+return (
+<div key={cmp} className="flex items-center gap-1 bg-white border border-gray-200 px-2 py-1 rounded shadow-sm">
+<input type="checkbox" checked={!hiddenCmpds[cmp]}
+onChange={e=>setHiddenCmpds(p=>({...p,[cmp]:!e.target.checked}))}
+className="w-3.5 h-3.5 cursor-pointer"/>
+<label title={`Color for ${cmp}`} style={{cursor:'pointer',display:'inline-flex',alignItems:'center',position:'relative'}}>
+<span className="color-swatch" style={{backgroundColor:hex}}/>
+<input type="color" value={hex}
+style={{position:'absolute',left:0,top:0,width:'100%',height:'100%',opacity:0,cursor:'pointer',padding:0,border:'none'}}
+onChange={e=>setCmpColors(p=>({...p,[cmp]:e.target.value}))}/>
+</label>
+<span className="text-xs font-medium text-gray-700 cursor-pointer hover:text-blue-600 mx-1"
+onClick={()=>setHiddenCmpds(p=>({...p,[cmp]:!p[cmp]}))}>{cmp}</span>
+<button onClick={() => {
+const newHidden = {};
+plotCmps.forEach(c => { if(c !== cmp) newHidden[c] = true; });
+setHiddenCmpds(newHidden);
+}} className="text-[9px] bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 px-1.5 py-0.5 rounded transition-colors ml-1 font-bold" title={`Show only ${cmp}`}>Solo</button>
+</div>
+);
+})}
+<button onClick={() => setHiddenCmpds({})} className="text-[10px] font-bold text-gray-600 underline hover:text-gray-800 ml-2" title="Show all series">Show All</button>
+</div>
+</div>
+):<div/>}
+<div className="flex gap-2">
+<button onClick={()=>setShowErrPanel(p=>!p)}
+className={`font-bold py-1.5 px-3 rounded border text-xs transition-colors ${showErrPanel ? 'bg-orange-100 border-orange-400 text-orange-800' : 'bg-white hover:bg-orange-50 text-orange-700 border-orange-300'}`} title="Open manual error and outlier adjustment panel">⚠️ Errors & Outliers</button><button onClick={()=>setShowChartCfg(p=>!p)}
+className={`font-bold py-1.5 px-3 rounded border text-xs transition-colors ${showChartCfg ? 'bg-gray-200 border-gray-400 text-gray-900' : 'bg-white hover:bg-gray-100 text-gray-800 border-gray-300'}`} title="Customize chart visuals, axes, and styles">⚙️ Chart Settings</button>
+</div>
+</div>
+{showChartCfg&&(
+<div className="mb-4 p-4 bg-white border border-gray-300 rounded-xl grid grid-cols-2 lg:grid-cols-4 gap-3 shadow-inner">
+{[['X Min','xMin'],['X Max','xMax'],['Y Min','yMin'],['Y Max','yMax']].map(([lbl,k])=>(
+<div key={k} className="flex flex-col gap-1">
+<label className="text-xs font-bold text-gray-700">{lbl}</label>
+<input type="number" placeholder="Auto" value={chartCfg[k]}
+onChange={e=>setChartCfg(p=>({...p,[k]:e.target.value}))} className="border border-gray-300 rounded p-1.5 text-sm"/>
+</div>
+))}
+<div className="flex flex-col gap-1"><label className="text-xs font-bold text-gray-700">Custom X Axis Label</label>
+<input type="text" placeholder={`Log₁₀ [Conc. (${unit})]`} value={chartCfg.xAxisLabel} onChange={e=>setChartCfg(p=>({...p,xAxisLabel:e.target.value}))} className="border border-gray-300 rounded p-1.5 text-sm"/></div>
+<div className="flex flex-col gap-1"><label className="text-xs font-bold text-gray-700">Font Size</label>
+<input type="number" value={chartCfg.fontSize} onChange={e=>setChartCfg(p=>({...p,fontSize:parseFloat(e.target.value)||12}))} className="border border-gray-300 rounded p-1.5 text-sm"/></div>
+<div className="flex flex-col gap-1"><label className="text-xs font-bold text-gray-700">Point Style</label>
+<select value={chartCfg.ptStyle} onChange={e=>setChartCfg(p=>({...p,ptStyle:e.target.value}))} className="border border-gray-300 rounded p-1.5 text-sm bg-white">
+{['circle','triangle','rect','rectRot','cross','crossRot','star'].map(s=><option key={s} value={s}>{s}</option>)}</select></div>
+<div className="flex flex-col gap-1"><label className="text-xs font-bold text-gray-700">Point Size</label>
+<input type="number" value={chartCfg.ptSize} onChange={e=>setChartCfg(p=>({...p,ptSize:parseFloat(e.target.value)||1}))} className="border border-gray-300 rounded p-1.5 text-sm"/></div>
+<div className="flex flex-col gap-1"><label className="text-xs font-bold text-gray-700">Axes Position</label>
+<div className="flex gap-1">
+<select value={chartCfg.xPos} onChange={e=>setChartCfg(p=>({...p,xPos:e.target.value}))} className="border border-gray-300 rounded p-1.5 text-xs bg-white flex-1">
+<option value="bottom">X bottom</option><option value="top">X top</option></select>
+<select value={chartCfg.yPos} onChange={e=>setChartCfg(p=>({...p,yPos:e.target.value}))} className="border border-gray-300 rounded p-1.5 text-xs bg-white flex-1">
+<option value="left">Y left</option><option value="right">Y right</option></select>
+</div></div>
+<div className="flex flex-col gap-1"><label className="text-xs font-bold text-gray-700">Line Style</label>
+<div className="flex gap-1">
+<select value={chartCfg.lineStyle} onChange={e=>setChartCfg(p=>({...p,lineStyle:e.target.value}))} className="border border-gray-300 rounded p-1.5 text-xs bg-white flex-1">
+<option value="solid">Solid</option><option value="dashed">Dashed</option><option value="dotted">Dotted</option></select>
+<input type="number" value={chartCfg.lineThickness} onChange={e=>setChartCfg(p=>({...p,lineThickness:parseFloat(e.target.value)||2}))} className="border border-gray-300 rounded p-1.5 text-sm w-16" title="Thickness"/>
+</div></div>
+<div className="flex flex-col gap-1">
+<label className="text-xs font-bold text-gray-700">Chart width: <span className="text-blue-600">{drWidth}%</span></label>
+<input type="range" min="20" max="80" step="5" value={drWidth} onChange={e=>setDrWidth(parseInt(e.target.value))} className="accent-blue-600" disabled={!fitIC50}/>
+</div>
+<div className="flex flex-col gap-1">
+<label className="text-xs font-bold text-gray-700">Fixed Chart height: <span className="text-blue-600">{chartH}px</span></label>
+<input type="range" min="200" max="1000" step="25" value={chartH} onChange={e=>setChartH(parseInt(e.target.value))} className="accent-blue-600"/>
+</div>
+</div>
+)}
+{showErrPanel&&(
+<div className="mb-4 p-4 bg-orange-50 border border-orange-200 rounded-xl shadow-inner">
+<div className="flex items-center justify-between mb-3">
+<h3 className="text-sm font-bold text-orange-800">Error bars per concentration (Weighted Fit)</h3>
+<div className="flex items-center gap-3">
+<p className="text-xs text-orange-600"><b>Orange</b> = manual override. IC50 fit is weighted (1/SD²), so manual changes <b>will</b> affect the curve.</p>
+</div>
+</div>
+<div className="flex flex-col gap-4">
+{Object.entries(processedByRegion).map(([reg, comps]) => (
+<div key={reg} className="bg-white rounded-lg border border-orange-200 p-3 shadow-sm">
+<h4 className="text-xs font-bold text-gray-500 uppercase mb-2 border-b pb-1">Region: {reg}</h4>
+<div className="flex flex-col gap-3">
+{comps.filter(d=>!hiddenCmpds[d.name]&&d.vPts.length>0).map(comp=>(
+<div key={comp.name}>
+<div className="flex items-center justify-between mb-1">
+<div className="flex items-center gap-2">
+<div className="w-3 h-3 rounded-full" style={{backgroundColor:comp.color}}/>
+<span className="text-sm font-bold text-gray-800">{comp.name}</span>
+</div>
+<div className="flex flex-wrap gap-3">
+<button onClick={()=>{autoTouchSD(reg, comp.name); setUseFixedSD(true);}}
+className="text-xs text-orange-700 hover:text-orange-900 font-bold transition-colors flex items-center gap-1" title="Set optimal error manually for this curve only">🎯 Auto-Touch SD</button>
+<button onClick={()=>cleanOutliers(reg, comp.name)}
+className="text-xs text-yellow-800 bg-yellow-100 hover:bg-yellow-200 border border-yellow-300 font-bold transition-colors flex items-center gap-1 px-2 py-0.5 rounded shadow-sm" title="Remove statistical outliers for this specific curve">🧹 Clean Outliers</button>
+<button onClick={()=>clearAllManual(comp.name)}
+className="text-xs text-orange-600 hover:underline font-medium" title="Revert to natural SD for this curve">🔄 Restore all SD</button>
+</div>
+</div>
+<div className="flex flex-wrap gap-3">
+{comp.vPts.map(pt=>{
+const isOverridden = hasManual(comp.name, pt.realX);
+return (
+<ErrInput key={`${comp.name}-${concKey(pt.realX)}`}
+label={`${formatConc(pt.realX)} µM`}
+value={isOverridden ? getManual(comp.name,pt.realX) : pt.sdRaw}
+sdRaw={pt.sdRaw}
+isOverridden={isOverridden}
+onSave={v=>storeManual(comp.name,pt.realX,v)}
+onReset={()=>clearManual(comp.name,pt.realX)}
+/>
+);
+})}
+</div>
+</div>
+))}
+</div>
+</div>
+))}
+{Object.keys(processedByRegion).length===0&&(
+<p className="text-sm text-orange-600 text-center py-3">No visible compounds with data.</p>
+)}
+</div>
+</div>
+)}
+{Object.entries(processedByRegion).map(([reg, comps]) => (
+<RegionCharts
+key={reg}
+regionName={reg}
+regionData={comps}
+config={{
+chartCfg, fitIC50, showExcl, eScale, fsPanel, chartH, drWidth, hiddenCmpds, unit,
+cellConfig, setCellConfig: (cfg) => updatePlate({cellConfig: cfg}), activePlateDim, toggleFs
+}}
+/>
+))}
+</div>
+</>
+)}
+</div>
+</div>
+</div>
+);
+}
+function RegionCharts({ regionName, regionData, config }) {
+const { chartCfg, fitIC50, showExcl, eScale, fsPanel, chartH, drWidth, hiddenCmpds, cellConfig, setCellConfig, activePlateDim, toggleFs, unit } = config;
+const drRef = useRef(null);
+const ic50Ref = useRef(null);
+const drChart = useRef(null);
+const ic50Chart = useRef(null);
+const isDrFs = fsPanel === `dr_${regionName}`;
+const isIc50Fs = fsPanel === `ic50_${regionName}`;
+useEffect(() => {
+if(!drRef.current) return;
+const ds=[], map=[];
+regionData.forEach(cd=>{
+if(hiddenCmpds[cd.name]) return;
+if(cd.fit){
+const lbl=`${cd.name} (IC50:${cd.fit.ic50.toFixed(2)}±${(cd.fit.se * eScale).toFixed(2)} ${unit})`;
+const minL=Math.min(...cd.vPts.map(p=>p.x))-0.2;
+const maxL=Math.max(...cd.vPts.map(p=>p.x))+0.2;
+const curve=[]; const step=(maxL-minL)/60;
+for(let v=minL;v<=maxL+step*0.5;v+=step)
+curve.push({x:v,y:100/(1+Math.pow(Math.pow(10,v)/cd.fit.ic50,cd.fit.hill))});
+let borderDash = [];
+if(chartCfg.lineStyle === 'dashed') borderDash = [5, 5];
+if(chartCfg.lineStyle === 'dotted') borderDash = [2, 3];
+ds.push({label:lbl,data:curve,borderColor:cd.color,backgroundColor:'transparent',borderWidth:chartCfg.lineThickness||2,borderDash:borderDash,pointRadius:0,fill:false,type:'line',tension:0,showLine:true});
+map.push(null);
+}
+if(cd.vPts.length>0){
+ds.push({
+label:cd.fit?`${cd.name} [pts]`:cd.name,
+data:cd.vPts,
+errorBars:cd.vPts.map(p=>({plus:p.sd*eScale,minus:p.sd*eScale})),
+borderColor:cd.color,backgroundColor:cd.color,borderWidth:2,
+pointBackgroundColor:cd.color,
+pointStyle:chartCfg.ptStyle||'circle',
+pointRadius:chartCfg.ptSize!=null?chartCfg.ptSize:5,
+fill:false,type:'scatter',showLine:false
+});
+map.push({name:cd.name,excl:false});
+}
+if(cd.ePts.length>0&&showExcl){
+ds.push({
+label:`${cd.name} [excl]`,data:cd.ePts,
+borderColor:'#9ca3af',backgroundColor:'#9ca3af',borderWidth:2,
+pointStyle:'crossRot',pointRadius:(chartCfg.ptSize!=null?chartCfg.ptSize:5)+2,
+fill:false,type:'scatter',showLine:false
+});
+map.push({name:cd.name,excl:true});
+}
+});
+if(drChart.current) drChart.current.destroy();
+drChart.current = new Chart(drRef.current,{
+type:'line', data:{datasets:ds}, plugins:[errBarPlugin],
+options:{
+onClick:(evt,els,chart)=>{
+const nc=cellConfig.map(row=>row.map(c=>({...c})));
+let changed=false;
+if(els.length>0){
+const m=map[els[0].datasetIndex]; if(!m) return;
+const pd=chart.data.datasets[els[0].datasetIndex].data[els[0].index];
+if(pd&&pd.pts){ pd.pts.forEach(p=>{nc[p.r][p.c].excluded=!m.excl;nc[p.r][p.c].manualOverride=true;}); changed=true; }
+} else {
+const pos=Chart.helpers.getRelativePosition(evt,chart);
+const dx=chart.scales.x.getValueForPixel(pos.x);
+let md=Infinity,tx=null;
+regionData.forEach(cd=>[...cd.vPts,...cd.ePts].forEach(p=>{const d=Math.abs(p.x-dx);if(d<md){md=d;tx=p.x;}}));
+if(tx!==null&&md<0.2){
+for(let r=0; r<activePlateDim.rows; r++) {
+for(let c=0; c<activePlateDim.cols; c++) {
+const cfg = nc[r][c];
+if((cfg.region||'Primary')!==regionName) continue;
+const xc = Number(cfg.conc) || 0;
+if(xc>0&&Math.abs(Math.log10(xc)-tx)<0.05&&cfg.excluded){
+cfg.excluded=false; cfg.manualOverride=true; changed=true;
+}
+}
+}
+}
+}
+if(changed) setCellConfig(nc);
+},
+responsive:true,maintainAspectRatio:false,
+interaction:{mode:'nearest',intersect:false},
+scales:{
+x:{
+type:'linear',position:chartCfg.xPos||'bottom',
+min:chartCfg.xMin!==''?parseFloat(chartCfg.xMin):undefined,
+max:chartCfg.xMax!==''?parseFloat(chartCfg.xMax):undefined,
+title:{display:true,text: chartCfg.xAxisLabel || `Log₁₀ [Conc. (${unit})]`,font:{size:chartCfg.fontSize+2,weight:'bold'},color:'#374151'},
+ticks:{
+font:{size:chartCfg.fontSize},color:'#4b5563',
+callback: function(value) { return value.toFixed(2); }
+}
+},
+y:{position:chartCfg.yPos||'left',
+min:chartCfg.yMin!==''?parseFloat(chartCfg.yMin):undefined,
+max:chartCfg.yMax!==''?parseFloat(chartCfg.yMax):undefined,
+title:{display:true,text:'Viability (%)',font:{size:chartCfg.fontSize+2,weight:'bold'},color:'#374151'},
+ticks:{font:{size:chartCfg.fontSize},color:'#4b5563'}}
+},
+plugins:{
+legend:{position:'top',labels:{font:{size:chartCfg.fontSize,weight:'bold'},
+filter:item=>{ if(item.text.includes('[excl]')) return false; if(fitIC50&&item.text.includes('[pts]')) return false; return true; }}},
+tooltip:{callbacks:{
+title: ctx => {
+const logX = ctx[0].parsed.x;
+const realX = ctx[0].raw && ctx[0].raw.realX ? ctx[0].raw.realX : Math.pow(10, logX);
+return `Conc: ${formatConc(realX)} ${unit} (log: ${logX.toFixed(2)})`;
+},
+label:ctx=>{
+const lbl=ctx.dataset.label.replace(' [pts]','');
+const y=ctx.parsed.y.toFixed(2);
+if(ctx.dataset.type==='scatter'){const sd=ctx.raw.sd?ctx.raw.sd.toFixed(2):'0.00';return `${lbl}: ${y}% ± ${(sd*eScale).toFixed(2)}`;}
+return `${lbl}: ${y}%`;
+}
+}}
+}
+}
+});
+return ()=>{ if(drChart.current) drChart.current.destroy(); };
+}, [regionData, hiddenCmpds, showExcl, eScale, chartCfg, fitIC50, fsPanel, activePlateDim, cellConfig]);
+useEffect(() => {
+if(!ic50Ref.current||!fitIC50) return;
+const labels=[],data=[],colors=[],ebars=[];
+regionData.forEach(cd=>{
+if(hiddenCmpds[cd.name]||!cd.fit||!isFinite(cd.fit.ic50)) return;
+labels.push(cd.name);
+data.push(cd.fit.ic50);
+colors.push(cd.color);
+const se=Math.min(cd.fit.se, cd.fit.ic50*2)*eScale;
+ebars.push({plus:se, minus:se});
+});
+if(ic50Chart.current) ic50Chart.current.destroy();
+ic50Chart.current = new Chart(ic50Ref.current,{
+type:'bar',
+data:{labels,datasets:[{label:`IC50 (${unit})`,data,backgroundColor:colors,borderColor:colors,borderWidth:1,errorBars:ebars}]},
+plugins:[errBarPlugin],
+options:{
+responsive:true,maintainAspectRatio:false,
+scales:{
+y:{position:chartCfg.yPos||'left',beginAtZero:true,
+title:{display:true,text:`IC50 (${unit})`,font:{size:chartCfg.fontSize+2,weight:'bold'},color:'#374151'},
+ticks:{font:{size:chartCfg.fontSize},color:'#4b5563'}},
+x:{position:chartCfg.xPos||'bottom',
+ticks:{font:{size:chartCfg.fontSize,weight:'bold'},color:'#374151'}}
+},
+plugins:{legend:{display:false},
+tooltip:{callbacks:{label:ctx=>`IC50: ${ctx.raw.toFixed(2)} ± ${(ebars[ctx.dataIndex]&&ebars[ctx.dataIndex].plus||0).toFixed(2)} ${unit}`}}}
+}
+});
+return ()=>{ if(ic50Chart.current) ic50Chart.current.destroy(); };
+}, [regionData, hiddenCmpds, fitIC50, eScale, chartCfg, fsPanel]);
+return (
+<div className="pdf-page-region flex flex-col gap-4 bg-gray-50 border border-gray-200 p-4 rounded-xl shadow-sm mb-4">
+<h3 className="text-lg font-black text-gray-800 border-b border-gray-300 pb-2">📍 Region: {regionName}</h3>
+<div className="flex flex-col lg:flex-row gap-6 pdf-row">
+<div className={`pdf-chart-main flex flex-col ${isDrFs ? 'panel-fullscreen' : 'min-w-0'}`} style={!isDrFs ? {width:fitIC50?`${drWidth}%`:'100%',flexShrink:0} : {}}>
+<div className="flex justify-between items-start mb-2">
+<div><h2 className="text-sm lg:text-base font-bold text-gray-800">Dose-Response Plot</h2></div>
+<button onClick={() => toggleFs(`dr_${regionName}`)} className="text-gray-400 hover:text-blue-600 bg-gray-100 hover:bg-blue-100 rounded p-1 transition-colors">{isDrFs ? '↙️' : '↗️'}</button>
+</div>
+<div className="pdf-chart-canvas-wrap" style={isDrFs ? { flex: 1, minHeight: 0, position: 'relative' } : { height: `${chartH}px`, minHeight: `${chartH}px`, position: 'relative' }}>
+<canvas ref={drRef}/>
+</div>
+</div>
+{fitIC50&&(
+<div className={`pdf-chart-ic50 flex flex-col ${isIc50Fs ? 'panel-fullscreen' : 'min-w-0 border-t lg:border-t-0 lg:border-l border-gray-200 pt-4 lg:pt-0 lg:pl-6'}`}
+style={!isIc50Fs ? {width:`${100-drWidth}%`,flexShrink:0} : {}}>
+<div className="flex justify-between items-start mb-2">
+<div><h2 className="text-sm lg:text-base font-bold text-gray-800">Calculated IC50</h2></div>
+<button onClick={() => toggleFs(`ic50_${regionName}`)} className="text-gray-400 hover:text-blue-600 bg-gray-100 hover:bg-blue-100 rounded p-1 transition-colors">{isIc50Fs ? '↙️' : '↗️'}</button>
+</div>
+<div className="pdf-chart-canvas-wrap" style={isIc50Fs ? { flex: 1, minHeight: 0, position: 'relative' } : { height: `${chartH}px`, minHeight: `${chartH}px`, position: 'relative' }}>
+<canvas ref={ic50Ref}/>
+</div>
+</div>
+)}
+</div>
+</div>
+);
+}
+function ErrInput({label, value, sdRaw, isOverridden, onSave, onReset}) {
+const [local, setLocal] = useState(value !== undefined && value !== null ? Number(value).toFixed(2) : sdRaw.toFixed(2));
+useEffect(()=>{ setLocal(value !== undefined && value !== null ? Number(value).toFixed(2) : sdRaw.toFixed(2)); },[value,sdRaw]);
+return (
+<div className="flex flex-col gap-1 min-w-[85px]">
+<span className="text-[10px] font-bold text-gray-500 truncate max-w-full" title={label}>{label}</span>
+<div className="flex items-center gap-1">
+<input type="number" step="0.1" min="0" value={local}
+onChange={e=>setLocal(e.target.value)}
+onBlur={e=>{
+const v=parseFloat(e.target.value);
+if(isNaN(v)) onReset();
+else onSave(v);
+}}
+className={`border rounded p-1 text-xs w-14 ${isOverridden?'border-orange-400 bg-orange-50 font-bold text-orange-700':'border-gray-300 bg-gray-50 text-gray-600'}`}/>
+{isOverridden&&(
+<button onClick={()=>{ setLocal(sdRaw.toFixed(2)); onReset(); }}
+title="Restore SD" className="text-orange-400 hover:text-orange-600 text-sm">🔄</button>
+)}
+</div>
+<span className={`text-[9px] ${isOverridden?'text-orange-600 font-bold':'text-gray-400'}`}>
+{isOverridden ? `✏️ manual (SD:${sdRaw.toFixed(2)})` : `SD: ${sdRaw.toFixed(2)}`}
+</span>
+</div>
+);
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
